@@ -1,0 +1,60 @@
+import { mountAthleteSettingsRail } from "./athlete-settings-rail";
+import {
+  getEntrainementPanelHtml,
+  bootstrapFitSessionsFromGarminBikeFolder,
+  mountEntrainementPanel,
+  refreshFtpFromVeloSessionsBadge,
+  revokeFitBlobUrls,
+} from "./entrainement";
+import {
+  ensureSimBikeKmEtaAthleteListener,
+  getSimulationPanelHtml,
+  mountSimulationPanel,
+} from "./simulation";
+import { mountGarminLocalPanel } from "./garmin-local";
+import { mountAppLoader } from "./app-loader";
+
+type ViewId = "entrainement" | "simulation";
+
+const panels: Record<ViewId, string> = {
+  entrainement: getEntrainementPanelHtml(),
+  simulation: getSimulationPanelHtml(),
+};
+
+export function initApp(): void {
+  const main = document.getElementById("main");
+  if (!main) return;
+
+  mountAppLoader();
+  mountAthleteSettingsRail();
+  mountGarminLocalPanel();
+  void bootstrapFitSessionsFromGarminBikeFolder();
+  void refreshFtpFromVeloSessionsBadge();
+  ensureSimBikeKmEtaAthleteListener();
+
+  const buttons = document.querySelectorAll<HTMLButtonElement>(".nav__btn");
+
+  function show(view: ViewId): void {
+    revokeFitBlobUrls(main);
+    main.innerHTML = panels[view];
+    buttons.forEach((btn) => {
+      const active = btn.dataset.view === view;
+      btn.classList.toggle("nav__btn--active", active);
+    });
+    if (view === "entrainement") {
+      void mountEntrainementPanel(main);
+    }
+    if (view === "simulation") {
+      void mountSimulationPanel(main);
+    }
+  }
+
+  buttons.forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const id = btn.dataset.view as ViewId | undefined;
+      if (id) show(id);
+    });
+  });
+
+  show("simulation");
+}

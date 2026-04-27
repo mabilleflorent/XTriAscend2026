@@ -1,0 +1,28 @@
+{
+  "name": "xtriascend",
+  "private": true,
+  "version": "0.0.1",
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "dev": "vite",
+    "watch": "vite",
+    "build": "tsc && vite build",
+    "preview": "vite preview",
+    "garmin:server": "node server/garmin-server.js",
+    "dev:all": "npx concurrently -n VITE,GARMIN -c blue,magenta \"npm run watch\" \"npm run garmin:server\"",
+    "xtriascend": "npm run dev:all"
+  },
+  "dependencies": {
+    "@garmin/fitsdk": "^21.200.0",
+    "express": "^5.1.0",
+    "playwright": "^1.55.0"
+  },
+  "devDependencies": {
+    "concurrently": "^9.2.1",
+    "typescript": "~5.7.2",
+    "vite": "^6.0.3"
+  }
+}

@@ -1,0 +1,9 @@
+node_modules
+dist
+*.local
+.DS_Store
+.garmin-session.json
+.garmin-playwright-storage.json
+.garmin-chromium-profile/
+public/fit/bike/*
+!public/fit/bike/.gitkeep
