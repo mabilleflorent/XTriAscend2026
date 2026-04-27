@@ -202,7 +202,6 @@ function computeBlackShirtResult(runRows: RunKmEtaRow[], raceStartH: number, rac
     if (nextDist + 1e-9 >= RUN_BLACK_SHIRT_CHECKPOINT_M) {
       const remain = RUN_BLACK_SHIRT_CHECKPOINT_M - cumRunDistM;
       const frac = r.horizM > 1e-9 ? Math.max(0, Math.min(1, remain / r.horizM)) : 0;
-      const tRunAt = prevCumTimeRunS + r.timeS * frac;
       const tAbsAt = prevCumTimeAbsS + r.timeS * frac;
       const startSec = raceStartH * 3600 + raceStartM * 60;
       const cutoffAbsSec = (() => {
@@ -1636,16 +1635,16 @@ export async function mountSimulationPanel(container: HTMLElement): Promise<void
 
   function renderSelectedProfile(): void {
     const p = currentProfileForChart();
-    chartEl.innerHTML = buildAltitudeProfileSvg(p.distancesM, p.elevationsM, p.dualLeg, {
+    chartEl!.innerHTML = buildAltitudeProfileSvg(p.distancesM, p.elevationsM, p.dualLeg, {
       offsetAbsM: p.offsetAbsM,
       bikeEndAbsM: bikeEndM,
     });
-    resetZoomBtn.hidden = selection === null;
+    resetZoomBtn!.hidden = selection === null;
   }
 
   function bindChartForCurrentProfile(): void {
     if (!navApi) return;
-    const svg = chartEl.querySelector<SVGSVGElement>("svg");
+    const svg = chartEl!.querySelector<SVGSVGElement>("svg");
     if (!svg) return;
     unbindChart?.();
     const p = currentProfileForChart();
@@ -1667,7 +1666,7 @@ export async function mountSimulationPanel(container: HTMLElement): Promise<void
     );
   }
 
-  resetZoomBtn.addEventListener("click", () => {
+  resetZoomBtn!.addEventListener("click", () => {
     selection = null;
     navApi?.resetZoom();
     renderSelectedProfile();
@@ -1684,7 +1683,7 @@ export async function mountSimulationPanel(container: HTMLElement): Promise<void
   renderSimBikeKmEtaTable(root);
   renderSimRunKmEtaTable(root);
 
-  const svg = chartEl.querySelector("svg");
+  const svg = chartEl!.querySelector("svg");
   if (svg) {
     try {
       navApi = await mountLeafletMap(mapEl, points, distM, [

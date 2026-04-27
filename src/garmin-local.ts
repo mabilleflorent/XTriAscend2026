@@ -86,10 +86,12 @@ export function mountGarminLocalPanel(): void {
       await pollLoginStatus().catch(() => {});
       pollKind = "login";
       pollTimer = window.setInterval(() => {
-        void pollLoginStatus().catch((e) => setStatus(`Statut login indisponible (${String(e?.message ?? e)})`));
+        void pollLoginStatus().catch((e: unknown) =>
+          setStatus(`Statut login indisponible (${String((e as any)?.message ?? e)})`)
+        );
       }, 2000);
     } catch (e) {
-      setStatus(`Impossible de joindre le serveur Garmin local (${String(e?.message ?? e)}).`);
+      setStatus(`Impossible de joindre le serveur Garmin local (${String((e as any)?.message ?? e)}).`);
     }
   });
 
@@ -108,10 +110,12 @@ export function mountGarminLocalPanel(): void {
       await pollExportStatus().catch(() => {});
       pollKind = "export";
       pollTimer = window.setInterval(() => {
-        void pollExportStatus().catch((e) => setStatus(`Statut export indisponible (${String(e?.message ?? e)})`));
+        void pollExportStatus().catch((e: unknown) =>
+          setStatus(`Statut export indisponible (${String((e as any)?.message ?? e)})`)
+        );
       }, 2000);
     } catch (e) {
-      setStatus(`Impossible de joindre le serveur Garmin local (${String(e?.message ?? e)}).`);
+      setStatus(`Impossible de joindre le serveur Garmin local (${String((e as any)?.message ?? e)}).`);
     }
   });
 
