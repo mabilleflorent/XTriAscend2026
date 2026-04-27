@@ -216,44 +216,6 @@ async function hasSession(id: string): Promise<boolean> {
   return !!(await getSession(id));
 }
 
-async function getAllSessions(): Promise<FitSession[]> {
-  const db = await openDb();
-  return new Promise((resolve, reject) => {
-    const tx = db.transaction(STORE_SESSIONS, "readonly");
-    const req = tx.objectStore(STORE_SESSIONS).getAll();
-    req.onerror = () => reject(req.error);
-    req.onsuccess = () => resolve((req.result as FitSession[]) ?? []);
-  });
-}
-
-async function getAllLinks(): Promise<StoredFitLink[]> {
-  const db = await openDb();
-  return new Promise((resolve, reject) => {
-    const tx = db.transaction(STORE_LINKS, "readonly");
-    const req = tx.objectStore(STORE_LINKS).getAll();
-    req.onerror = () => reject(req.error);
-    req.onsuccess = () => resolve((req.result as StoredFitLink[]) ?? []);
-  });
-}
-
-/** Remplace entièrement les séances et les liens (restauration sauvegarde). */
-async function replaceAllFitData(sessions: FitSession[], links: StoredFitLink[]): Promise<void> {
-  const db = await openDb();
-  return new Promise((resolve, reject) => {
-    const tx = db.transaction([STORE_SESSIONS, STORE_LINKS], "readwrite");
-    tx.oncomplete = () => resolve();
-    tx.onerror = () => reject(tx.error);
-    tx.onabort = () => reject(tx.error ?? new Error("IndexedDB abort"));
-
-    const sessStore = tx.objectStore(STORE_SESSIONS);
-    const linkStore = tx.objectStore(STORE_LINKS);
-    sessStore.clear();
-    linkStore.clear();
-    for (const s of sessions) sessStore.put(s);
-    for (const l of links) linkStore.put(l);
-  });
-}
-
 /** Met à jour la catégorie vélo d'un lien existant (sans re-décoder le FIT). `null` retire la catégorie. */
 async function updateLinkVeloCategory(sessionId: string, category: VeloCategory | null): Promise<void> {
   const linkId = `velo:${sessionId}`;

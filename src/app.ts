@@ -24,6 +24,7 @@ const panels: Record<ViewId, string> = {
 export function initApp(): void {
   const main = document.getElementById("main");
   if (!main) return;
+  const mainEl = main;
 
   mountAppLoader();
   mountAthleteSettingsRail();
@@ -35,17 +36,17 @@ export function initApp(): void {
   const buttons = document.querySelectorAll<HTMLButtonElement>(".nav__btn");
 
   function show(view: ViewId): void {
-    revokeFitBlobUrls(main);
-    main.innerHTML = panels[view];
+    revokeFitBlobUrls(mainEl);
+    mainEl.innerHTML = panels[view];
     buttons.forEach((btn) => {
       const active = btn.dataset.view === view;
       btn.classList.toggle("nav__btn--active", active);
     });
     if (view === "entrainement") {
-      void mountEntrainementPanel(main);
+      void mountEntrainementPanel(mainEl);
     }
     if (view === "simulation") {
-      void mountSimulationPanel(main);
+      void mountSimulationPanel(mainEl);
     }
   }
 

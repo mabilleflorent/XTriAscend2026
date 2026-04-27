@@ -194,7 +194,6 @@ type BlackShirtResult = {
 function computeBlackShirtResult(runRows: RunKmEtaRow[], raceStartH: number, raceStartM: number): BlackShirtResult | null {
   // On cherche le temps absolu (offset depuis l'heure de départ) au 31,188 km du tracé CAP.
   let cumRunDistM = 0;
-  let prevCumTimeRunS = 0;
   let prevCumTimeAbsS = 0;
   for (const r of runRows) {
     if (r.isTotal) continue;
@@ -220,7 +219,6 @@ function computeBlackShirtResult(runRows: RunKmEtaRow[], raceStartH: number, rac
       };
     }
     cumRunDistM = nextDist;
-    prevCumTimeRunS = r.cumTimeEndRunS;
     prevCumTimeAbsS = r.cumTimeEndAbsS;
   }
   return null;
