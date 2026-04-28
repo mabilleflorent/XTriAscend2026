@@ -34,9 +34,10 @@ function getT2DurationS(): number {
 
 const MAP_COLOR_BIKE = "#1c70e2";
 const MAP_COLOR_RUN = "#1d5c3f";
-const CHART_COLOR_SWIM = "#0ea5e9";
-const CHART_COLOR_BIKE = "#1c70e2";
-const CHART_COLOR_RUN = "#22804a";
+// Couleurs du profil altimétrique (demande UI) : nage bleu, vélo vert, CAP rouge doux.
+const CHART_COLOR_SWIM = "#1c70e2";
+const CHART_COLOR_BIKE = "#16a34a";
+const CHART_COLOR_RUN = "#f87171";
 
 /**
  * Repères de cols (distances fixées).
@@ -1134,6 +1135,97 @@ function buildAltitudeProfileSvg(
   const toX = (dM: number) => PAD.l + (dM / distMax) * pw;
   const toY = (ele: number) => PAD.t + ph - ((ele - yMin) / yRange) * ph;
 
+  function elevationAtDistanceM(dM: number): number {
+    const n2 = distancesM.length;
+    if (n2 === 0) return 0;
+    const d = Math.max(0, Math.min(distancesM[n2 - 1] ?? 0, dM));
+    let lo = 0;
+    let hi = n2 - 1;
+    while (lo < hi) {
+      const mid = Math.floor((lo + hi) / 2);
+      if ((distancesM[mid] ?? 0) < d) lo = mid + 1;
+      else hi = mid;
+    }
+    const i1 = Math.min(Math.max(1, lo), n2 - 1);
+    const i0 = i1 - 1;
+    const d0 = distancesM[i0] ?? 0;
+    const d1 = distancesM[i1] ?? d0;
+    const e0 = elevationsM[i0] ?? 0;
+    const e1 = elevationsM[i1] ?? e0;
+    const t = d1 > d0 + 1e-9 ? (d - d0) / (d1 - d0) : 0;
+    return e0 + (e1 - e0) * t;
+  }
+
+  function gradeColor(gradePct: number): string {
+    // Palette demandée : vert > bleu > orange > rouge > noir
+    // Seuils : vert < 6,5% ; bleu < 8% ; orange < 9% ; rouge < 10% ; noir >= 10%
+    // Couleurs plus vives (style schéma col).
+    if (gradePct < 6.5) return "#00c853"; // vert vif
+    if (gradePct < 8) return "#00b0ff"; // bleu vif
+    if (gradePct < 9) return "#ff9100"; // orange vif
+    if (gradePct < 10) return "#ff1744"; // rouge vif (pas trop sombre)
+    return "#111827"; // noir (anthracite)
+  }
+
+  function buildBikeClimbGradeBandsLayer(): string {
+    // Option B : bandes verticales colorées uniquement sur les 4 grosses montées vélo.
+    // Elles doivent rester visibles même en zoom (graphe ou carte).
+    if (!xLabelRef) return "";
+    const swimEndAbsM = xLabelRef.swimEndAbsM ?? 0;
+    if (swimEndAbsM <= 0) return "";
+
+    const climbs = [
+      { name: "Port de Balès", startKm: 84.5, endKm: 100.558 },
+      { name: "Col de Peyresourde", startKm: 116.11, endKm: 125.679 },
+      { name: "Val Louron-Azet", startKm: 138.17, endKm: 143.253 },
+      { name: "Col d'Aspin", startKm: 169.6, endKm: 178.943 },
+    ];
+
+    const offsetAbsM = xLabelRef.offsetAbsM ?? 0;
+    const yBot = PAD.t + ph;
+    const rects: string[] = [];
+
+    for (const c of climbs) {
+      // Les km fournis sont relatifs au départ vélo → convertir en distance absolue (course) via + natation.
+      // Découpage en tranches de 500 m (moyenne par tranche) : alignées sur les bornes 0,5 km vélo.
+      const stepKm = 0.5;
+      const k0 = Math.floor(c.startKm / stepKm);
+      const k1 = Math.ceil(c.endKm / stepKm);
+      for (let ki = k0; ki < k1; ki++) {
+        const segA = ki * stepKm;
+        const segB = segA + stepKm;
+        const segStartKm = Math.max(c.startKm, segA);
+        const segEndKm = Math.min(c.endKm, segB);
+        if (segEndKm - segStartKm < 1e-6) continue;
+
+        const absStart = swimEndAbsM + segStartKm * 1000;
+        const absEnd = swimEndAbsM + segEndKm * 1000;
+        const startRel = absStart - offsetAbsM;
+        const endRel = absEnd - offsetAbsM;
+        const a = Math.max(0, Math.min(distMax, Math.min(startRel, endRel)));
+        const b = Math.max(0, Math.min(distMax, Math.max(startRel, endRel)));
+        if (b - a < 1) continue;
+
+        const e0 = elevationAtDistanceM(a);
+        const e1 = elevationAtDistanceM(b);
+        const dHoriz = Math.max(1e-6, b - a);
+        const grade = Math.max(0, ((e1 - e0) / dHoriz) * 100);
+        const fill = gradeColor(grade);
+        const x0 = toX(a);
+        const x1 = toX(b);
+        const yTopBand = Math.min(yBot, toY((e0 + e1) / 2));
+        rects.push(
+          `<rect x="${x0.toFixed(2)}" y="${yTopBand.toFixed(2)}" width="${Math.max(0.8, x1 - x0).toFixed(
+            2
+          )}" height="${Math.max(0, yBot - yTopBand).toFixed(2)}" fill="${fill}" opacity="0.88" stroke="rgba(255,255,255,0.75)" stroke-width="1"><title>${escapeHtml(
+            `${c.name} · ${(segStartKm).toLocaleString("fr-FR", { maximumFractionDigits: 2 })}-${(segEndKm).toLocaleString("fr-FR", { maximumFractionDigits: 2 })} km · ${grade.toLocaleString("fr-FR", { maximumFractionDigits: 1 })}%`
+          )}</title></rect>`
+        );
+      }
+    }
+    return rects.length ? `<g class="sim-alt-grade-bands" aria-hidden="true">${rects.join("")}</g>` : "";
+  }
+
   const polylinePair = (() => {
     const poly = (pts: string, color: string) =>
       `<polyline points="${pts}" fill="none" stroke="${color}" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>`;
@@ -1213,6 +1305,7 @@ function buildAltitudeProfileSvg(
   const xStart = toX(0).toFixed(1);
   const ox = PAD.l + 6;
   const oy = PAD.t + 4;
+  const gradeBandsLayer = buildBikeClimbGradeBandsLayer();
 
   return `<svg viewBox="0 0 ${W} ${H}" class="sim-velo__chart-svg" role="img" aria-label="Profil altimétrique — survolez pour prévisualiser, cliquez pour fixer le marqueur sur la carte ; un second curseur suit le survol si un point est déjà fixé">
 ${gridLines}
@@ -1222,6 +1315,7 @@ ${xGridAndLabels}
 <text x="12" y="${(PAD.t + ph / 2).toFixed(0)}" text-anchor="middle" font-size="10" fill="#52525b" transform="rotate(-90 12 ${(PAD.t + ph / 2).toFixed(0)})">Altitude (m)</text>
 <text x="${((PAD.l + W - PAD.r) / 2).toFixed(0)}" y="${xTitleY}" text-anchor="middle" font-size="10" fill="#52525b">Distance (km)</text>
 ${courseColMarkersLayer}
+${gradeBandsLayer}
 ${polylinePair}
 <rect id="sim-alt-select-rect" x="${PAD.l}" y="${yTop}" width="0" height="${ph}" fill="rgba(234,88,12,0.10)" stroke="rgba(234,88,12,0.45)" stroke-width="1" visibility="hidden" pointer-events="none"/>
 <line id="sim-alt-cursor-locked" class="sim-alt-cursor sim-alt-cursor--locked" x1="${xStart}" y1="${yTop}" x2="${xStart}" y2="${yBot}" stroke="#1c70e2" stroke-width="2" stroke-dasharray="4 4" visibility="hidden" pointer-events="none"/>
@@ -1700,10 +1794,44 @@ export function getSimulationPanelHtml(): string {
         <div class="sim-velo__km-eta" id="sim-velo-km-eta-block" aria-labelledby="t-sim-km-eta">
           <h4 class="sim-velo__chart-title" id="t-sim-km-eta">Temps estimé au kilomètre (vélo)</h4>
           <p class="sim-velo__km-eta-hint">
-            Modèle puissance constante : <span class="sim-velo__km-eta-formula">P<sub>fournie</sub>·η = Mg(sinα+C<sub>rr</sub>cosα)·V + ½ρ·CdA·V³</span>
-            avec η=0,97, g=9,81&nbsp;m/s², C<sub>rr</sub>=0,005, ρ=1,15&nbsp;kg/m³, CdA=0,32&nbsp;m² ; α et les <strong>D+ / D−</strong> au km partent d’un <strong>profil altimétrique lissé</strong> (moyenne glissante sur les points du GPX), plus proche des totaux « ascension / descente » des appareils que le brut point-à-point.
-            En <strong>descente</strong> (Δalt &lt; 0 sur le segment), la vitesse simulée est <strong>plafonnée à 75&nbsp;km/h</strong> (routes ouvertes, prudence).
-            La <strong>masse totale</strong>, la <strong>FTP vélo</strong> et l’<strong>heure de départ de la course</strong> se règlent dans le menu <strong>Paramètres</strong> à gauche. La colonne <strong>Heure (fin km)</strong> indique l’heure cumulée à la fin de chaque kilomètre vélo (et à la fin du tracé vélo pour la ligne Total) ; si l’effort dépasse minuit, un repère <strong>(+N j)</strong> est affiché.
+            <strong>Règles de calcul (implémentées)</strong>
+            <ul class="sim-velo__km-eta-rules">
+              <li>
+                <strong>Entrées</strong> : <strong>FTP</strong> = <span class="sim-velo__km-eta-formula"><math xmlns="http://www.w3.org/1998/Math/MathML"><mi>P</mi></math></span> (en W) et <strong>masse totale</strong> = <span class="sim-velo__km-eta-formula"><math xmlns="http://www.w3.org/1998/Math/MathML"><mi>M</mi></math></span> (en kg).
+                Le tracé vient du <strong>GPX</strong> (latitude/longitude/altitude).
+              </li>
+              <li>
+                <strong>Lissage des altitudes</strong> : on applique une <strong>moyenne glissante</strong> sur l’altitude GPX.
+                Cela sert à éviter que le bruit ne fasse exploser les petits D+ / D−.
+              </li>
+              <li>
+                <strong>Calcul segment par segment</strong> (entre 2 points GPX) :
+                on calcule la distance horizontale <span class="sim-velo__km-eta-formula"><math xmlns="http://www.w3.org/1998/Math/MathML"><mi>horiz</mi></math></span>,
+                la variation d’altitude <span class="sim-velo__km-eta-formula"><math xmlns="http://www.w3.org/1998/Math/MathML"><mi>Δalt</mi></math></span>,
+                puis la pente <span class="sim-velo__km-eta-formula"><math xmlns="http://www.w3.org/1998/Math/MathML"><mi>α</mi></math></span>
+                (angle, basé sur <span class="sim-velo__km-eta-formula"><math xmlns="http://www.w3.org/1998/Math/MathML"><mi>Δalt</mi><mo>/</mo><mi>horiz</mi></math></span>).
+              </li>
+              <li>
+                <strong>Vitesse du segment</strong> : on cherche la vitesse <span class="sim-velo__km-eta-formula"><math xmlns="http://www.w3.org/1998/Math/MathML"><mi>V</mi></math></span>
+                qui “consomme” exactement la puissance fournie, via :
+                <span class="sim-velo__km-eta-formula"><math xmlns="http://www.w3.org/1998/Math/MathML"><mrow><mi>P</mi><mo>·</mo><mi>η</mi><mo>=</mo><mi>M</mi><mi>g</mi><mo>⁢</mo><mrow><mo>(</mo><mi>sin</mi><mo>⁡</mo><mi>α</mi><mo>+</mo><msub><mi>C</mi><mi>rr</mi></msub><mo>·</mo><mi>cos</mi><mo>⁡</mo><mi>α</mi><mo>)</mo></mrow><mo>·</mo><mi>V</mi><mo>+</mo><mfrac><mn>1</mn><mn>2</mn></mfrac><mi>ρ</mi><mo>·</mo><mi>CdA</mi><mo>·</mo><msup><mi>V</mi><mn>3</mn></msup></mrow></math></span>.
+                <span class="sim-velo__km-eta-symbols">Constantes : η=0,97 ; g=9,81 ; Crr=0,005 ; ρ=1,15 ; CdA=0,32.</span>
+              </li>
+              <li>
+                <strong>Sécurité en descente</strong> : si le segment est en descente (<span class="sim-velo__km-eta-formula"><math xmlns="http://www.w3.org/1998/Math/MathML"><mi>Δalt</mi><mo>&lt;</mo><mn>0</mn></math></span>),
+                alors la vitesse calculée est plafonnée à <strong>${BIKE_DESCENT_MAX_SPEED_KMH}&nbsp;km/h</strong>.
+              </li>
+              <li>
+                <strong>Temps du segment</strong> :
+                on calcule la distance “réelle” du segment (sur la pente) et le temps
+                <span class="sim-velo__km-eta-formula"><math xmlns="http://www.w3.org/1998/Math/MathML"><mi>t</mi><mo>=</mo><mfrac><msqrt><mrow><msup><mi>horiz</mi><mn>2</mn></msup><mo>+</mo><msup><mi>Δalt</mi><mn>2</mn></msup></mrow></msqrt><mi>V</mi></mfrac></math></span>.
+              </li>
+              <li>
+                <strong>Tableau km/km</strong> :
+                chaque segment peut traverser 1 ou plusieurs km : on répartit son <strong>temps</strong> et ses <strong>D+ / D−</strong>
+                au prorata dans les tranches de 1000&nbsp;m, puis on cumule pour obtenir la colonne “Temps estimé” et “Heure”.
+              </li>
+            </ul>
           </p>
           <div class="sim-velo__km-eta-table-wrap" id="sim-velo-km-eta-table" aria-live="polite"></div>
         </div>
@@ -1714,13 +1842,52 @@ export function getSimulationPanelHtml(): string {
         <div class="sim-velo__km-eta sim-run-km-eta" id="sim-run-km-eta-block" aria-labelledby="t-sim-run-km-eta">
           <h4 class="sim-velo__chart-title" id="t-sim-run-km-eta">Temps estimé au kilomètre (course à pied)</h4>
           <p class="sim-velo__km-eta-hint">
-            Par kilomètre, le <strong>Δalt net</strong> (D+ − D−, comme la jauge rouge / verte) fixe le modèle :
-            <strong>km rouge</strong> (gain net) → temps = max(temps imposé par <strong>1000 m D+ / h</strong> sur le D+ du km, temps à allure <strong>VMA</strong> sur la distance horizontale) ;
-            <strong>km vert</strong> (perte nette) → temps à allure <strong>VMA</strong> sur l’horizontale, avec <strong>+35&nbsp;% de temps</strong> si la pente moyenne du km est &lt; ≈ −28&nbsp;% et l’horizontale ≥ ~18&nbsp;m (freinage).
-            <strong>Post-vélo</strong> : +8&nbsp;% de temps sur <strong>chaque</strong> km de course (malus d’enchaînement après le vélo).
-            <strong>Allure plancher</strong> : au plus rapide <strong>5:00 / km</strong> sur la distance horizontale du km (on ne descend pas sous ce seuil).
-            <strong>Fatigue</strong> : +5&nbsp;% de temps par heure de course déjà écoulée au <strong>début du km</strong> (en plus du post-vélo).
-            <strong>D+ / D−</strong> : même <strong>lissage altimétrique GPX</strong> que le vélo. <strong>Heure (fin km)</strong> : départ affiché + vélo + course jusqu’à la fin du km.
+            <strong>Règles de calcul (implémentées)</strong>
+            <ul class="sim-velo__km-eta-rules">
+              <li>
+                <strong>Entrée</strong> : ta <strong>VMA CAP</strong> fixe la vitesse “de référence” sur le plat.
+                On la convertit en m/s (ex: 14 km/h → 3,89 m/s).
+              </li>
+              <li>
+                <strong>Découpage en km</strong> : pour chaque km, on mesure sur le GPX :
+                <strong>distance horizontale</strong>, <strong>D+</strong>, <strong>D−</strong> (altitude <strong>lissée</strong> comme le vélo).
+                Puis on calcule <span class="sim-velo__km-eta-formula"><math xmlns="http://www.w3.org/1998/Math/MathML"><mi>Δalt</mi><mo>=</mo><mi>D+</mi><mo>−</mo><mi>D−</mi></math></span>.
+              </li>
+              <li>
+                <strong>Temps de base du km</strong> :
+                <ul class="sim-velo__km-eta-rules">
+                  <li>
+                    <strong>Cas montée</strong> : si \(Δalt &gt; ${RUN_NET_ELEV_FLAT_M.toLocaleString("fr-FR")} m\),
+                    on prend le plus lent entre :
+                    <span class="sim-velo__km-eta-symbols">a) un temps imposé par la montée (VAM = ${RUN_VAM_M_PER_H.toLocaleString("fr-FR")} m D+/h)</span>
+                    et <span class="sim-velo__km-eta-symbols">b) le temps à VMA sur l’horizontale</span>.
+                  </li>
+                  <li>
+                    <strong>Cas descente</strong> : si \(Δalt &lt; -${RUN_NET_ELEV_FLAT_M.toLocaleString("fr-FR")} m\),
+                    temps à VMA sur l’horizontale, puis si la descente est “très raide”
+                    (pente moyenne &lt; ${Math.round(RUN_STEEP_DESCENT_GRADE * 100)}% et horiz ≥ ${RUN_STEEP_DESCENT_MIN_HORIZ_M} m),
+                    on applique une pénalité <span class="sim-velo__km-eta-symbols">×${RUN_STEEP_DESCENT_TIME_MULT.toLocaleString("fr-FR")}</span>.
+                  </li>
+                  <li>
+                    <strong>Cas plat</strong> : si \(|Δalt| \le ${RUN_NET_ELEV_FLAT_M.toLocaleString("fr-FR")} m\),
+                    temps à VMA sur l’horizontale.
+                  </li>
+                </ul>
+              </li>
+              <li>
+                <strong>Multiplicateurs</strong> :
+                <span class="sim-velo__km-eta-symbols">post-vélo ×${RUN_POST_BIKE_TIME_MULT.toLocaleString("fr-FR")}</span>,
+                puis <span class="sim-velo__km-eta-symbols">fatigue +${Math.round(RUN_FATIGUE_PER_HOUR * 100)}% par heure déjà courue</span> (calculée au début du km).
+              </li>
+              <li>
+                <strong>Allure plancher</strong> :
+                le km ne peut pas être plus rapide que <span class="sim-velo__km-eta-symbols">${RUN_PACE_MIN_MIN_PER_KM}:00 / km</span>
+                (sur la distance horizontale du km).
+              </li>
+              <li>
+                <strong>Heure (fin km)</strong> : inclut départ + <strong>Nage</strong> + <strong>T1</strong> + <strong>Vélo</strong> + <strong>T2</strong> + cumul course jusqu’à la fin du km.
+              </li>
+            </ul>
           </p>
           <div class="sim-velo__km-eta-table-wrap" id="sim-run-km-eta-table" aria-live="polite"></div>
         </div>

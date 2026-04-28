@@ -737,9 +737,8 @@ body {
 }
 
 .sim-velo__km-eta-formula {
-  font-family: ui-monospace, monospace;
-  font-size: 0.72rem;
-  color: var(--ascend-text-tertiary);
+  font-size: 0.92rem;
+  color: var(--ascend-text-secondary);
   white-space: normal;
 }
 
@@ -785,6 +784,25 @@ body {
 .sim-velo__km-eta-unit {
   font-size: 0.78rem;
   color: var(--ascend-muted);
+}
+
+.sim-velo__km-eta-formula math {
+  font-size: 1.1em;
+}
+
+.sim-velo__km-eta-symbols {
+  font-size: 0.78rem;
+  color: var(--ascend-muted);
+  white-space: nowrap;
+}
+
+.sim-velo__km-eta-rules {
+  margin: 0.4rem 0 0.55rem;
+  padding-left: 1.15rem;
+}
+
+.sim-velo__km-eta-rules li {
+  margin: 0.15rem 0;
 }
 
 .sim-velo__km-eta-table-wrap {
