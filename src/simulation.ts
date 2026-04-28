@@ -6,9 +6,7 @@ import {
   getSwimPaceSecPer100m,
   getSwimPaceMMSSPer100m,
   getT1Sec,
-  getT1MMSS,
   getT2Sec,
-  getT2MMSS,
   getTotalMassKg,
   getVmaCapKmh,
 } from "./athlete-settings";
