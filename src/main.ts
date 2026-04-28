@@ -1,5 +1,8 @@
 import "./style.css";
 import { initApp } from "./app";
+import { isStrictLocalhost } from "./local-only";
+
+const isLocal = isStrictLocalhost();
 
 document.querySelector<HTMLDivElement>("#app")!.innerHTML = `
   <header class="header">
@@ -67,7 +70,9 @@ document.querySelector<HTMLDivElement>("#app")!.innerHTML = `
           </div>
           </div>
         </div>
-        <div class="garmin-local" id="garmin-local" aria-label="Connecteur Garmin local">
+        ${
+          isLocal
+            ? `<div class="garmin-local" id="garmin-local" aria-label="Connecteur Garmin local">
           <h2 class="athlete-settings-rail__title athlete-settings-rail__title--garmin">Garmin</h2>
           <div class="garmin-local__actions">
             <button type="button" class="garmin-local__btn" id="garmin-local-open-login">
@@ -78,7 +83,9 @@ document.querySelector<HTMLDivElement>("#app")!.innerHTML = `
             </button>
           </div>
           <p class="garmin-local__status muted" id="garmin-local-status" role="status" aria-live="polite"></p>
-        </div>
+        </div>`
+            : ""
+        }
       </div>
       <div class="athlete-settings-rail__extras">
         <div class="athlete-settings-rail__sim-final" id="sim-final-time" hidden aria-live="polite">
@@ -93,9 +100,13 @@ document.querySelector<HTMLDivElement>("#app")!.innerHTML = `
     </div>
   </section>
   <nav class="nav" aria-label="Navigation principale">
-    <button type="button" class="nav__btn nav__btn--active" data-view="simulation">
+    ${
+      isLocal
+        ? `<button type="button" class="nav__btn nav__btn--active" data-view="simulation">
       Simulation
-    </button>
+    </button>`
+        : ""
+    }
     <button type="button" class="nav__btn" data-view="entrainement">
       Suivi de l'entraînement
     </button>

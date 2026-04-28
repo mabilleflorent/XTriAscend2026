@@ -1,3 +1,5 @@
+import { isStrictLocalhost } from "./local-only";
+
 /** Base du connecteur Express + Playwright (`npm run garmin:server`). */
 function garminServerBase(): string {
   const raw = import.meta.env.VITE_GARMIN_SERVER_URL?.trim();
@@ -6,6 +8,7 @@ function garminServerBase(): string {
 }
 
 export function mountGarminLocalPanel(): void {
+  if (!isStrictLocalhost()) return;
   const btnLogin = document.getElementById("garmin-local-open-login");
   const btnExport = document.getElementById("garmin-local-export-fit");
   const status = document.getElementById("garmin-local-status");

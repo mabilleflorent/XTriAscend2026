@@ -204,6 +204,11 @@ body {
   margin-bottom: 1.25rem;
 }
 
+.nav:has(.nav__btn:only-child) .nav__btn {
+  flex: 0 0 auto;
+  width: 100%;
+}
+
 .nav__btn {
   flex: 1;
   padding: 0.6rem 0.75rem;

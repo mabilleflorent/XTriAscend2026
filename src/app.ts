@@ -13,6 +13,7 @@ import {
 } from "./simulation";
 import { mountGarminLocalPanel } from "./garmin-local";
 import { mountAppLoader } from "./app-loader";
+import { isStrictLocalhost } from "./local-only";
 
 type ViewId = "entrainement" | "simulation";
 
@@ -25,6 +26,7 @@ export function initApp(): void {
   const main = document.getElementById("main");
   if (!main) return;
   const mainEl = main;
+  const isLocal = isStrictLocalhost();
 
   mountAppLoader();
   mountAthleteSettingsRail();
@@ -36,6 +38,7 @@ export function initApp(): void {
   const buttons = document.querySelectorAll<HTMLButtonElement>(".nav__btn");
 
   function show(view: ViewId): void {
+    if (!isLocal && view === "simulation") view = "entrainement";
     revokeFitBlobUrls(mainEl);
     mainEl.innerHTML = panels[view];
     buttons.forEach((btn) => {
@@ -57,5 +60,5 @@ export function initApp(): void {
     });
   });
 
-  show("simulation");
+  show(isLocal ? "simulation" : "entrainement");
 }
