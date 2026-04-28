@@ -100,16 +100,16 @@ document.querySelector<HTMLDivElement>("#app")!.innerHTML = `
     </div>
   </section>
   <nav class="nav" aria-label="Navigation principale">
+    <button type="button" class="nav__btn nav__btn--active" data-view="simulation">
+      Simulation
+    </button>
     ${
       isLocal
-        ? `<button type="button" class="nav__btn nav__btn--active" data-view="simulation">
-      Simulation
+        ? `<button type="button" class="nav__btn" data-view="entrainement">
+      Suivi de l'entraînement
     </button>`
         : ""
     }
-    <button type="button" class="nav__btn" data-view="entrainement">
-      Suivi de l'entraînement
-    </button>
   </nav>
   <div class="app-layout">
     <main class="main" id="main"></main>

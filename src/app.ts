@@ -38,7 +38,7 @@ export function initApp(): void {
   const buttons = document.querySelectorAll<HTMLButtonElement>(".nav__btn");
 
   function show(view: ViewId): void {
-    if (!isLocal && view === "simulation") view = "entrainement";
+    if (!isLocal && view === "entrainement") view = "simulation";
     revokeFitBlobUrls(mainEl);
     mainEl.innerHTML = panels[view];
     buttons.forEach((btn) => {
@@ -60,5 +60,5 @@ export function initApp(): void {
     });
   });
 
-  show(isLocal ? "simulation" : "entrainement");
+  show("simulation");
 }
