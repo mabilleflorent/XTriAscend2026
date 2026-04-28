@@ -284,24 +284,25 @@ body {
   width: 100%;
   display: flex;
   flex-direction: row;
-  flex-wrap: nowrap;
+  flex-wrap: wrap;
   gap: 0.45rem 0.65rem;
   align-items: center;
   min-width: 0;
-  overflow-x: auto;
-  overscroll-behavior-x: contain;
-  padding-bottom: 0.15rem;
 }
 
-/** Une seule ligne : libellé court + contrôle, parts égales qui rétrécissent si besoin */
+/** 3 champs par ligne : chaque champ occupe ~1/3 de la largeur disponible */
 .athlete-settings-rail--bar .ftp-config--stack,
 .athlete-settings-rail--bar .vma-config--stack,
 .athlete-settings-rail--bar .mass-config--stack,
-.athlete-settings-rail--bar .race-start-config--stack {
+.athlete-settings-rail--bar .race-start-config--stack,
+.athlete-settings-rail--bar .swim-pace-config--stack,
+.athlete-settings-rail--bar .t1-config--stack,
+.athlete-settings-rail--bar .t2-config--stack {
   flex-direction: row;
   flex-wrap: nowrap;
   align-items: center;
-  flex: 1 1 0;
+  flex: 1 1 calc(33.33% - 0.65rem);
+  max-width: calc(33.33% - 0.65rem);
   min-width: 0;
   gap: 0.35rem;
 }
@@ -309,7 +310,10 @@ body {
 .athlete-settings-rail--bar .ftp-config__label,
 .athlete-settings-rail--bar .vma-config__label,
 .athlete-settings-rail--bar .mass-config__label,
-.athlete-settings-rail--bar .race-start-config__label {
+.athlete-settings-rail--bar .race-start-config__label,
+.athlete-settings-rail--bar .swim-pace-config__label,
+.athlete-settings-rail--bar .t1-config__label,
+.athlete-settings-rail--bar .t2-config__label {
   flex: 0 1 auto;
   white-space: nowrap;
   font-size: 0.72rem;
@@ -334,6 +338,19 @@ body {
   width: auto;
   flex: 1 1 4.5rem;
   min-width: 4.25rem;
+}
+
+.athlete-settings-rail--bar .swim-pace-config__input--rail {
+  width: auto;
+  flex: 1 1 2.5rem;
+  min-width: 2.35rem;
+}
+
+.athlete-settings-rail--bar .t1-config__input--rail,
+.athlete-settings-rail--bar .t2-config__input--rail {
+  width: auto;
+  flex: 1 1 2.8rem;
+  min-width: 2.6rem;
 }
 
 .athlete-settings-rail__extras {
@@ -505,7 +522,8 @@ body {
 .ftp-config--stack,
 .vma-config--stack,
 .mass-config--stack,
-.race-start-config--stack {
+.race-start-config--stack,
+.swim-pace-config--stack {
   flex-direction: column;
   align-items: stretch;
   gap: 0.35rem;
@@ -514,7 +532,8 @@ body {
 .ftp-config__input--rail,
 .vma-config__input--rail,
 .mass-config__input--rail,
-.race-start-config__input--rail {
+.race-start-config__input--rail,
+.swim-pace-config__input--rail {
   flex: 1;
   min-width: 0;
   width: 100%;
@@ -1519,6 +1538,81 @@ body {
   background: var(--ascend-surface);
 }
 
+.swim-pace-config {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.swim-pace-config__label {
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--ascend-text-secondary);
+}
+
+.swim-pace-config__input {
+  width: 4.5rem;
+  padding: 0.25rem 0.4rem;
+  border: 1px solid var(--ascend-border);
+  border-radius: 6px;
+  font-size: 0.85rem;
+  color: var(--ascend-ink-strong);
+  background: var(--ascend-bg-elevated);
+  text-align: right;
+}
+
+.swim-pace-config__input:focus {
+  outline: 2px solid var(--ascend-focus);
+  outline-offset: 1px;
+  border-color: var(--ascend-focus);
+  background: var(--ascend-surface);
+}
+
+.swim-pace-config__unit {
+  font-size: 0.8rem;
+  color: var(--ascend-muted);
+}
+
+.t1-config,
+.t2-config {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.t1-config__label,
+.t2-config__label {
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--ascend-text-secondary);
+}
+
+.t1-config__input,
+.t2-config__input {
+  width: 4.5rem;
+  padding: 0.25rem 0.4rem;
+  border: 1px solid var(--ascend-border);
+  border-radius: 6px;
+  font-size: 0.85rem;
+  color: var(--ascend-ink-strong);
+  background: var(--ascend-bg-elevated);
+  text-align: right;
+}
+
+.t1-config__input:focus,
+.t2-config__input:focus {
+  outline: 2px solid var(--ascend-focus);
+  outline-offset: 1px;
+  border-color: var(--ascend-focus);
+  background: var(--ascend-surface);
+}
+
+.t1-config__unit,
+.t2-config__unit {
+  font-size: 0.8rem;
+  color: var(--ascend-muted);
+}
+
 .training-card__body {
   min-height: 8rem;
 }
@@ -1841,5 +1935,57 @@ body {
 .uploads-item__cat--none {
   background: var(--ascend-bg-subtle);
   color: var(--ascend-muted);
+}
+
+/* ─── Badge de discipline (Nage / Vélo / Course) dans les tableaux sim ──────── */
+.sim-leg-badge {
+  display: inline-block;
+  padding: 0.15rem 0.55rem;
+  border-radius: 999px;
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+}
+
+.sim-leg-badge--swim {
+  background: #e0f7ff;
+  color: #0369a1;
+}
+
+.sim-leg-badge--t1,
+.sim-leg-badge--t2 {
+  background: #eef2ff;
+  color: #3730a3;
+}
+
+/* Ligne natation : fond cyan très léger + valeurs centrées */
+.sim-velo__km-eta-tr--swim td {
+  background: #f0fbff;
+  text-align: center;
+}
+
+.sim-velo__km-eta-tr--transition td {
+  background: #f5f7ff;
+  text-align: center;
+}
+
+.sim-velo__km-eta-table--swim thead th {
+  text-align: center;
+}
+
+/* Sur le tableau natation, on centre aussi les colonnes "num" (sinon alignées à droite via !important). */
+.sim-velo__km-eta-table--swim .sim-velo__km-eta-cell--num {
+  text-align: center !important;
+}
+
+.sim-velo__km-eta-table--t1 thead th,
+.sim-velo__km-eta-table--t2 thead th {
+  text-align: center;
+}
+
+.sim-velo__km-eta-table--t1 .sim-velo__km-eta-cell--num,
+.sim-velo__km-eta-table--t2 .sim-velo__km-eta-cell--num {
+  text-align: center !important;
 }
 

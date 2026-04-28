@@ -69,6 +69,27 @@ document.querySelector<HTMLDivElement>("#app")!.innerHTML = `
             />
           </div>
           </div>
+          <div class="swim-pace-config swim-pace-config--stack">
+          <label class="swim-pace-config__label" for="swim-pace-rail-input" title="Allure de nage au format mm:ss /100m (ex: 02:00). Durée natation 3,8 km incluse dans les horaires vélo.">Nage</label>
+          <div class="athlete-settings-rail__input-row">
+            <input class="swim-pace-config__input swim-pace-config__input--rail" id="swim-pace-rail-input" type="text" inputmode="numeric" placeholder="02:00" aria-label="Allure de nage au format MM:SS par 100 m"/>
+            <span class="swim-pace-config__unit">mm:ss/100m</span>
+          </div>
+          </div>
+          <div class="t1-config t1-config--stack">
+          <label class="t1-config__label" for="t1-rail-input" title="Temps de transition natation → vélo (T1).">T1</label>
+          <div class="athlete-settings-rail__input-row">
+            <input class="t1-config__input t1-config__input--rail" id="t1-rail-input" type="text" inputmode="numeric" placeholder="00:00" aria-label="Temps de transition natation vers vélo (T1) au format MM:SS"/>
+            <span class="t1-config__unit">mm:ss</span>
+          </div>
+          </div>
+          <div class="t2-config t2-config--stack">
+          <label class="t2-config__label" for="t2-rail-input" title="Temps de transition vélo → course à pied (T2).">T2</label>
+          <div class="athlete-settings-rail__input-row">
+            <input class="t2-config__input t2-config__input--rail" id="t2-rail-input" type="text" inputmode="numeric" placeholder="00:00" aria-label="Temps de transition vélo vers course à pied (T2) au format MM:SS"/>
+            <span class="t2-config__unit">mm:ss</span>
+          </div>
+          </div>
         </div>
         ${
           isLocal

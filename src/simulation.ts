@@ -1,21 +1,67 @@
 /** Page Simulation : parcours vélo depuis GPX, carte OpenStreetMap (Leaflet), profil altimétrique. */
 
-import { getFtp, getRaceStartHourMinute, getTotalMassKg, getVmaCapKmh } from "./athlete-settings";
+import {
+  getFtp,
+  getRaceStartHourMinute,
+  getSwimPaceSecPer100m,
+  getSwimPaceMMSSPer100m,
+  getT1Sec,
+  getT1MMSS,
+  getT2Sec,
+  getT2MMSS,
+  getTotalMassKg,
+  getVmaCapKmh,
+} from "./athlete-settings";
 import { ATHLETE_SETTINGS_CHANGED } from "./athlete-settings-rail";
 
 const GPX_VELO_URL = "/gpx/velo/parcours.gpx";
 const GPX_RUN_URL = "/gpx/run/parcours.gpx";
 
+/** Distance fixe de la natation en triathlon longue distance (Ascend XTRI). */
+const SWIM_DIST_M = 3800;
+
+/** Durée de la natation en secondes d'après l'allure saisie. */
+function getSwimDurationS(): number {
+  const paceSecPer100m = getSwimPaceSecPer100m();
+  return paceSecPer100m * (SWIM_DIST_M / 100);
+}
+
+function getT1DurationS(): number {
+  return getT1Sec();
+}
+
+function getT2DurationS(): number {
+  return getT2Sec();
+}
+
 const MAP_COLOR_BIKE = "#1c70e2";
 const MAP_COLOR_RUN = "#1d5c3f";
+const CHART_COLOR_SWIM = "#0ea5e9";
 const CHART_COLOR_BIKE = "#1c70e2";
 const CHART_COLOR_RUN = "#22804a";
+
+/**
+ * Repères de cols (distances fixées).
+ * - `absKm` : km depuis le départ vélo (distance absolue sur le parcours combiné)
+ * - `runKm` : km depuis le départ CAP (relatif CAP), converti via `bikeEndAbsM`
+ */
+const COURSE_COL_MARKERS: { name: string; absKm?: number; runKm?: number }[] = [
+  { name: "Port de Balès", absKm: 100.558 },
+  { name: "Col de Peyresourde", absKm: 125.679 },
+  { name: "Col de Val Louron-Azet", absKm: 143.253 },
+  { name: "Col d'Aspin", absKm: 178.943 },
+  { name: "Col de la Courade", runKm: 18.036 },
+  { name: "Col d'Arizes", runKm: 26.474 },
+  { name: "Col de Sencours", runKm: 31.917 },
+  { name: "Pic du Midi", runKm: 35.139 },
+];
 
 /** Dimensions du SVG profil (utilisées pour le mapping souris ↔ distance). */
 const CHART_LAYOUT = {
   W: 640,
-  H: 220,
-  PAD: { t: 18, r: 18, b: 46, l: 58 },
+  // PAD.t large pour que les labels de cols en vertical (≈ 90px de haut) restent au-dessus du tracé.
+  H: 270,
+  PAD: { t: 100, r: 18, b: 46, l: 58 },
 } as const;
 
 /** Leaflet chargé depuis le CDN (évite d’avoir à installer le paquet npm `leaflet`). */
@@ -66,6 +112,83 @@ function escapeHtml(s: string): string {
     .replace(/</g, "&lt;")
     .replace(/>/g, "&gt;")
     .replace(/"/g, "&quot;");
+}
+
+function buildCourseColMarkersLayer(args: {
+  toX: (dRelM: number) => number;
+  yTop: number;
+  yBot: number;
+  distMaxRelM: number;
+  offsetAbsM: number;
+  swimEndAbsM: number;
+  bikeEndAbsM: number;
+  showLabels: boolean;
+}): string {
+  const { toX, yTop, yBot, distMaxRelM, offsetAbsM, swimEndAbsM, bikeEndAbsM, showLabels } = args;
+  // Zoom : labels horizontaux centrés dans la marge supérieure (yTop - 14 ≈ 86 avec PAD.t=100).
+  const yTextZoom = yTop - 14;
+  // Normal : labels verticaux ancrés en bas à (yTop - 4). text-anchor="end" + rotate(-90)
+  // → le texte s'étend vers le haut, entièrement dans la marge supérieure, hors du graphique.
+  const yTextNormal = yTop - 4;
+  const labelBgPadX = 3;
+  const labelBgPadY = 2;
+  const labelFs = 6.2;
+  const items = COURSE_COL_MARKERS.map((m) => {
+    const absM =
+      typeof m.absKm === "number"
+        ? m.absKm * 1000 + swimEndAbsM  // cols vélo : coordonnées GPX + décalage natation
+        : typeof m.runKm === "number" && bikeEndAbsM > 1e-6
+          ? bikeEndAbsM + m.runKm * 1000  // cols course : bikeEndAbsM inclut déjà la natation
+          : null;
+    if (absM === null) return null;
+    const relM = absM - offsetAbsM;
+    if (relM < -1e-6 || relM > distMaxRelM + 1e-6) return null;
+    const x = toX(relM);
+    const name = escapeHtml(m.name);
+    const xS = x.toFixed(1);
+    const yTopS = yTop.toFixed(1);
+    const yBotS = yBot.toFixed(1);
+    const base = `<g class="sim-col-marker" pointer-events="none">
+<line x1="${xS}" y1="${yTopS}" x2="${xS}" y2="${yBotS}" stroke="rgba(0,0,0,0.22)" stroke-width="1" stroke-dasharray="3 5"/>
+${(() => {
+      // Fond du label : largeur approx pour éviter les mesures JS.
+      const approxW = Math.max(58, Math.min(180, name.length * 6 + 2 * labelBgPadX));
+      const bgW = approxW.toFixed(0);
+      const bgH = (labelFs + 2 * labelBgPadY + 2).toFixed(0);
+      if (showLabels) {
+        // Zoom : horizontal, centré.
+        const yTextS = yTextZoom.toFixed(1);
+        const bgX = (-approxW / 2).toFixed(0);
+        const bgY = (-(labelFs + labelBgPadY + 2)).toFixed(0);
+        return `<g transform="translate(${xS} ${yTextS})">
+  <rect x="${bgX}" y="${bgY}" width="${bgW}" height="${bgH}" rx="6" fill="rgba(255,255,255,0.86)"/>
+  <text x="0" y="0" text-anchor="middle" dominant-baseline="alphabetic"
+    font-size="${labelFs}" font-weight="650"
+    fill="rgba(15,18,24,0.88)"
+    stroke="rgba(255,255,255,0.92)" stroke-width="3" paint-order="stroke"
+  >${name}</text>
+</g>`;
+      }
+
+      // Normal : vertical — translate(xS, yTextNormal) rotate(-90).
+      // Dans ce repère SVG : local +x → vers le HAUT de l'écran.
+      // text-anchor="start" (x: 0 → +approxW) → le texte monte de yTextNormal vers y≈0.
+      const yTextS = yTextNormal.toFixed(1);
+      const bgX = "0"; // rect commence à x=0 (bas du label en screen), monte vers le haut
+      const bgY = (-(labelFs + labelBgPadY)).toFixed(0);
+      return `<g transform="translate(${xS} ${yTextS}) rotate(-90)">
+  <rect x="${bgX}" y="${bgY}" width="${bgW}" height="${bgH}" rx="6" fill="rgba(255,255,255,0.82)"/>
+  <text x="0" y="0" text-anchor="start" dominant-baseline="alphabetic"
+    font-size="${labelFs}" font-weight="650"
+    fill="rgba(15,18,24,0.82)"
+    stroke="rgba(255,255,255,0.92)" stroke-width="3" paint-order="stroke"
+  >${name}</text>
+</g>`;
+    })()}
+</g>`;
+    return base;
+  }).filter(Boolean);
+  return items.join("\n");
 }
 
 function haversineM(a: { lat: number; lng: number }, b: { lat: number; lng: number }): number {
@@ -608,7 +731,74 @@ function buildElevationMeterHtml(dPlusM: number, dMinusM: number, isTotal: boole
   )}</div></div>`;
 }
 
-function buildBikeKmEtaTableHtml(rows: BikeKmEtaRow[]): string {
+function buildSwimSummaryHtml(): string {
+  const swimS = getSwimDurationS();
+  const { h: sh, m: sm } = getRaceStartHourMinute();
+  const paceStr = `${getSwimPaceMMSSPer100m()} / 100m`;
+  const durationStr = formatEtaSplitTime(swimS);
+  const endClock = formatClockFromRaceStart(swimS, sh, sm);
+  const startClock = formatClockFromRaceStart(0, sh, sm);
+  return `<table class="sim-velo__km-eta-table sim-velo__km-eta-table--swim">
+<thead><tr>
+<th scope="col">Segment</th>
+<th scope="col">Distance</th>
+<th scope="col">Durée</th>
+<th scope="col">Allure</th>
+<th scope="col">Heure départ → arrivée</th>
+</tr></thead>
+<tbody><tr class="sim-velo__km-eta-tr--swim">
+<td><span class="sim-leg-badge sim-leg-badge--swim">Nage</span></td>
+<td class="sim-velo__km-eta-cell--num">3,8 km</td>
+<td class="sim-velo__km-eta-cell--num">${escapeHtml(durationStr)}</td>
+<td class="sim-velo__km-eta-cell--num">${escapeHtml(paceStr)}</td>
+<td class="sim-velo__km-eta-cell--num">${escapeHtml(startClock)} → ${escapeHtml(endClock)}</td>
+</tr></tbody>
+</table>`;
+}
+
+function buildT1SummaryHtml(): string {
+  const t1S = getT1DurationS();
+  const { h: sh, m: sm } = getRaceStartHourMinute();
+  const start = getSwimDurationS();
+  const end = start + t1S;
+  return `<table class="sim-velo__km-eta-table sim-velo__km-eta-table--t1">
+<thead><tr>
+<th scope="col">Transition</th>
+<th scope="col">Durée</th>
+<th scope="col">Heure départ → arrivée</th>
+</tr></thead>
+<tbody><tr class="sim-velo__km-eta-tr--transition">
+<td><span class="sim-leg-badge sim-leg-badge--t1">T1</span></td>
+<td class="sim-velo__km-eta-cell--num">${escapeHtml(formatEtaSplitTime(t1S))}</td>
+<td class="sim-velo__km-eta-cell--num">${escapeHtml(formatClockFromRaceStart(start, sh, sm))} → ${escapeHtml(
+    formatClockFromRaceStart(end, sh, sm)
+  )}</td>
+</tr></tbody>
+</table>`;
+}
+
+function buildT2SummaryHtml(bikeTotalS: number): string {
+  const t2S = getT2DurationS();
+  const { h: sh, m: sm } = getRaceStartHourMinute();
+  const start = getSwimDurationS() + getT1DurationS() + Math.max(0, bikeTotalS);
+  const end = start + t2S;
+  return `<table class="sim-velo__km-eta-table sim-velo__km-eta-table--t2">
+<thead><tr>
+<th scope="col">Transition</th>
+<th scope="col">Durée</th>
+<th scope="col">Heure départ → arrivée</th>
+</tr></thead>
+<tbody><tr class="sim-velo__km-eta-tr--transition">
+<td><span class="sim-leg-badge sim-leg-badge--t2">T2</span></td>
+<td class="sim-velo__km-eta-cell--num">${escapeHtml(formatEtaSplitTime(t2S))}</td>
+<td class="sim-velo__km-eta-cell--num">${escapeHtml(formatClockFromRaceStart(start, sh, sm))} → ${escapeHtml(
+    formatClockFromRaceStart(end, sh, sm)
+  )}</td>
+</tr></tbody>
+</table>`;
+}
+
+function buildBikeKmEtaTableHtml(rows: BikeKmEtaRow[], swimOffsetS = 0): string {
   if (rows.length === 0) {
     return `<p class="sim-velo__km-eta-empty">Pas assez de données vélo pour estimer les temps au km.</p>`;
   }
@@ -623,7 +813,7 @@ function buildBikeKmEtaTableHtml(rows: BikeKmEtaRow[]): string {
   const body = rows
     .map((r) => {
       const vStr = r.avgKmh > 0 ? `${r.avgKmh.toLocaleString("fr-FR", { maximumFractionDigits: 1 })} km/h` : "—";
-      const timeCol = formatClockFromRaceStart(r.cumTimeEndS, sh, sm);
+      const timeCol = formatClockFromRaceStart(r.cumTimeEndS + swimOffsetS, sh, sm);
       const elevHtml = buildElevationMeterHtml(r.dPlusM, r.dMinusM, r.isTotal);
       const trCls = r.isTotal ? ' class="sim-velo__km-eta-tr--total"' : "";
       return `<tr${trCls}>
@@ -703,6 +893,7 @@ let simRunEtaCache: { pointsRun: GpxTrackPoint[]; distRun: number[]; bikeOffsetS
 let simBikeEtaAthleteListenerAttached = false;
 
 function renderSimRunKmEtaTable(root: HTMLElement): void {
+  const t2SummaryEl = root.querySelector<HTMLElement>("#sim-t2-summary");
   const tableEl = root.querySelector<HTMLElement>("#sim-run-km-eta-table");
   if (!tableEl || !simRunEtaCache) return;
   let bikeTotalS = simRunEtaCache.bikeOffsetS;
@@ -715,11 +906,13 @@ function renderSimRunKmEtaTable(root: HTMLElement): void {
     );
     bikeTotalS = bikeRows.length > 0 ? bikeRows[bikeRows.length - 1].cumTimeEndS : simRunEtaCache.bikeOffsetS;
   }
+  if (t2SummaryEl) t2SummaryEl.innerHTML = buildT2SummaryHtml(bikeTotalS);
+  const swimOffsetS = getSwimDurationS() + getT1DurationS() + getT2DurationS();
   const runRows = computeRunKmEtaRows(
     simRunEtaCache.pointsRun,
     simRunEtaCache.distRun,
     getVmaCapKmh(),
-    bikeTotalS
+    bikeTotalS + swimOffsetS
   );
   const { h: sh, m: sm } = getRaceStartHourMinute();
   let blackShirt = computeBlackShirtResult(runRows, sh, sm);
@@ -758,12 +951,16 @@ function renderSimRunKmEtaTable(root: HTMLElement): void {
 }
 
 function renderSimBikeKmEtaTable(root: HTMLElement): void {
+  const swimSummaryEl = root.querySelector<HTMLElement>("#sim-swim-summary");
+  const t1SummaryEl = root.querySelector<HTMLElement>("#sim-t1-summary");
   const tableEl = root.querySelector<HTMLElement>("#sim-velo-km-eta-table");
   if (!tableEl || !simBikeEtaCache) return;
+  if (swimSummaryEl) swimSummaryEl.innerHTML = buildSwimSummaryHtml();
+  if (t1SummaryEl) t1SummaryEl.innerHTML = buildT1SummaryHtml();
   const P = getFtp();
   const M = getTotalMassKg();
   const rows = computeBikeKmEtaRows(simBikeEtaCache.pointsVelo, simBikeEtaCache.distVelo, P, M);
-  tableEl.innerHTML = buildBikeKmEtaTableHtml(rows);
+  tableEl.innerHTML = buildBikeKmEtaTableHtml(rows, getSwimDurationS() + getT1DurationS());
   renderSimRunKmEtaTable(root);
 }
 
@@ -774,7 +971,7 @@ export function ensureSimBikeKmEtaAthleteListener(): void {
   document.addEventListener(ATHLETE_SETTINGS_CHANGED, ((ev: Event) => {
     const e = ev as CustomEvent<{ key: string }>;
     const k = e.detail?.key;
-    if (k !== "ftp" && k !== "mass" && k !== "raceStart" && k !== "vma") return;
+    if (k !== "ftp" && k !== "mass" && k !== "raceStart" && k !== "vma" && k !== "swim" && k !== "t1" && k !== "t2") return;
     const panel = document.querySelector<HTMLElement>(".panel--simulation");
     if (!panel) return;
     renderSimBikeKmEtaTable(panel);
@@ -892,12 +1089,22 @@ function formatDistanceKmLabel(dM: number, stepM: number): string {
   return km.toLocaleString("fr-FR", { maximumFractionDigits: 0 });
 }
 
-function formatLegDistanceKmLabel(absDistanceM: number, stepM: number, bikeEndAbsM: number): string {
+function formatLegDistanceKmLabel(
+  absDistanceM: number,
+  stepM: number,
+  bikeEndAbsM: number,
+  swimEndAbsM: number
+): string {
   const d = Math.max(0, absDistanceM);
-  const km =
-    bikeEndAbsM > 1e-6 && d >= bikeEndAbsM - 1e-6 ? (d - bikeEndAbsM) / 1000 : d / 1000;
-  // Axe X : lisible (sans décimales). Le détail est dans l’overlay.
   void stepM;
+  let km: number;
+  if (bikeEndAbsM > 1e-6 && d >= bikeEndAbsM - 1e-6) {
+    km = (d - bikeEndAbsM) / 1000; // CAP : relatif au depart course
+  } else if (swimEndAbsM > 1e-6 && d >= swimEndAbsM - 1e-6) {
+    km = (d - swimEndAbsM) / 1000; // Velo : relatif au depart velo
+  } else {
+    km = d / 1000; // Natation : depuis le depart
+  }
   return km.toLocaleString("fr-FR", { maximumFractionDigits: 0 });
 }
 
@@ -905,7 +1112,8 @@ function buildAltitudeProfileSvg(
   distancesM: number[],
   elevationsM: number[],
   dualLeg?: { splitIndex: number },
-  xLabelRef?: { offsetAbsM: number; bikeEndAbsM: number }
+  triLeg?: { swimSplitIndex: number; bikeSplitIndex: number },
+  xLabelRef?: { offsetAbsM: number; swimEndAbsM: number; bikeEndAbsM: number; zoomed?: boolean }
 ): string {
   const n = distancesM.length;
   if (n < 2) {
@@ -929,25 +1137,24 @@ function buildAltitudeProfileSvg(
   const toY = (ele: number) => PAD.t + ph - ((ele - yMin) / yRange) * ph;
 
   const polylinePair = (() => {
-    if (!dualLeg) {
-      const pts = distancesM.map((d, i) => `${toX(d).toFixed(1)},${toY(elevationsM[i]).toFixed(1)}`).join(" ");
-      return `<polyline points="${pts}" fill="none" stroke="${CHART_COLOR_BIKE}" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>`;
+    const poly = (pts: string, color: string) =>
+      `<polyline points="${pts}" fill="none" stroke="${color}" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>`;
+    const pts = (from: number, to: number) =>
+      distancesM.slice(from, to + 1).map((d, j) => `${toX(d).toFixed(1)},${toY(elevationsM[from + j]).toFixed(1)}`).join(" ");
+    if (triLeg) {
+      const si = Math.min(Math.max(0, triLeg.swimSplitIndex), n - 1);
+      const bi = Math.min(Math.max(si, triLeg.bikeSplitIndex), n - 1);
+      return [poly(pts(0, si), CHART_COLOR_SWIM), poly(pts(si, bi), CHART_COLOR_BIKE), poly(pts(bi, n - 1), CHART_COLOR_RUN)].join("\n");
     }
-    const si = Math.min(Math.max(0, dualLeg.splitIndex), n - 1);
-    const ptsBike = distancesM
-      .slice(0, si + 1)
-      .map((d, j) => `${toX(d).toFixed(1)},${toY(elevationsM[j]).toFixed(1)}`)
-      .join(" ");
-    const ptsRun = distancesM
-      .slice(si)
-      .map((d, j) => `${toX(d).toFixed(1)},${toY(elevationsM[si + j]).toFixed(1)}`)
-      .join(" ");
-    return `<polyline points="${ptsBike}" fill="none" stroke="${CHART_COLOR_BIKE}" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>
-<polyline points="${ptsRun}" fill="none" stroke="${CHART_COLOR_RUN}" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>`;
+    if (dualLeg) {
+      const si = Math.min(Math.max(0, dualLeg.splitIndex), n - 1);
+      return [poly(pts(0, si), CHART_COLOR_BIKE), poly(pts(si, n - 1), CHART_COLOR_RUN)].join("\n");
+    }
+    return poly(pts(0, n - 1), CHART_COLOR_BIKE);
   })();
 
-  const targetYSteps = Math.max(18, Math.min(36, Math.floor(ph / 7)));
-  const yStepM = niceAxisStepM(yRange, targetYSteps);
+  // Axe Y : pas fixe (m) pour une lecture "profil course" (ex. 200 m).
+  const yStepM = 200;
   const yTickStart = Math.ceil(yMin / yStepM) * yStepM;
   const yTicks: number[] = [];
   for (let v = yTickStart; v <= yMax + yStepM * 1e-6; v += yStepM) {
@@ -981,13 +1188,24 @@ function buildAltitudeProfileSvg(
   const xTitleY = H - 2;
   const xTickFs = xDistTicks.length > 28 ? 8 : 9;
 
+  const courseColMarkersLayer = buildCourseColMarkersLayer({
+    toX,
+    yTop,
+    yBot,
+    distMaxRelM: distMax,
+    offsetAbsM: xLabelRef?.offsetAbsM ?? 0,
+    swimEndAbsM: xLabelRef?.swimEndAbsM ?? 0,
+    bikeEndAbsM: xLabelRef?.bikeEndAbsM ?? 0,
+    showLabels: xLabelRef?.zoomed === true,
+  });
+
   const xGridAndLabels = xDistTicks
     .map((dM) => {
       const x = toX(dM).toFixed(1);
       const onLeft = dM <= xStepM * 0.02;
       const stroke = onLeft ? "#e8e8ea" : "#f0f0f1";
       const label = xLabelRef
-        ? formatLegDistanceKmLabel(xLabelRef.offsetAbsM + dM, xStepM, xLabelRef.bikeEndAbsM)
+        ? formatLegDistanceKmLabel(xLabelRef.offsetAbsM + dM, xStepM, xLabelRef.bikeEndAbsM, xLabelRef.swimEndAbsM ?? 0)
         : formatDistanceKmLabel(dM, xStepM);
       return `<line x1="${x}" y1="${yTop}" x2="${x}" y2="${yBot}" stroke="${stroke}" stroke-width="1"/>
 <text x="${x}" y="${xLabelY}" text-anchor="middle" font-size="${xTickFs}" fill="#71717a">${label}</text>`;
@@ -1005,6 +1223,7 @@ ${xGridAndLabels}
 <line x1="${PAD.l}" y1="${yTop}" x2="${PAD.l}" y2="${yBot}" stroke="#c4c4c8" stroke-width="1.5"/>
 <text x="12" y="${(PAD.t + ph / 2).toFixed(0)}" text-anchor="middle" font-size="10" fill="#52525b" transform="rotate(-90 12 ${(PAD.t + ph / 2).toFixed(0)})">Altitude (m)</text>
 <text x="${((PAD.l + W - PAD.r) / 2).toFixed(0)}" y="${xTitleY}" text-anchor="middle" font-size="10" fill="#52525b">Distance (km)</text>
+${courseColMarkersLayer}
 ${polylinePair}
 <rect id="sim-alt-select-rect" x="${PAD.l}" y="${yTop}" width="0" height="${ph}" fill="rgba(234,88,12,0.10)" stroke="rgba(234,88,12,0.45)" stroke-width="1" visibility="hidden" pointer-events="none"/>
 <line id="sim-alt-cursor-locked" class="sim-alt-cursor sim-alt-cursor--locked" x1="${xStart}" y1="${yTop}" x2="${xStart}" y2="${yBot}" stroke="#1c70e2" stroke-width="2" stroke-dasharray="4 4" visibility="hidden" pointer-events="none"/>
@@ -1472,6 +1691,14 @@ export function getSimulationPanelHtml(): string {
           </div>
           <div class="sim-velo__chart" id="sim-velo-chart"></div>
         </div>
+        <div class="sim-velo__km-eta sim-swim-km-eta" id="sim-swim-km-eta-block" aria-label="Résumé natation">
+          <h4 class="sim-velo__chart-title">Natation</h4>
+          <div class="sim-velo__km-eta-table-wrap" id="sim-swim-summary" aria-live="polite"></div>
+        </div>
+        <div class="sim-velo__km-eta sim-transition-km-eta" id="sim-t1-km-eta-block" aria-label="Transition T1">
+          <h4 class="sim-velo__chart-title">T1</h4>
+          <div class="sim-velo__km-eta-table-wrap" id="sim-t1-summary" aria-live="polite"></div>
+        </div>
         <div class="sim-velo__km-eta" id="sim-velo-km-eta-block" aria-labelledby="t-sim-km-eta">
           <h4 class="sim-velo__chart-title" id="t-sim-km-eta">Temps estimé au kilomètre (vélo)</h4>
           <p class="sim-velo__km-eta-hint">
@@ -1481,6 +1708,10 @@ export function getSimulationPanelHtml(): string {
             La <strong>masse totale</strong>, la <strong>FTP vélo</strong> et l’<strong>heure de départ de la course</strong> se règlent dans le menu <strong>Paramètres</strong> à gauche. La colonne <strong>Heure (fin km)</strong> indique l’heure cumulée à la fin de chaque kilomètre vélo (et à la fin du tracé vélo pour la ligne Total) ; si l’effort dépasse minuit, un repère <strong>(+N j)</strong> est affiché.
           </p>
           <div class="sim-velo__km-eta-table-wrap" id="sim-velo-km-eta-table" aria-live="polite"></div>
+        </div>
+        <div class="sim-velo__km-eta sim-transition-km-eta" id="sim-t2-km-eta-block" aria-label="Transition T2">
+          <h4 class="sim-velo__chart-title">T2</h4>
+          <div class="sim-velo__km-eta-table-wrap" id="sim-t2-summary" aria-live="polite"></div>
         </div>
         <div class="sim-velo__km-eta sim-run-km-eta" id="sim-run-km-eta-block" aria-labelledby="t-sim-run-km-eta">
           <h4 class="sim-velo__chart-title" id="t-sim-run-km-eta">Temps estimé au kilomètre (course à pied)</h4>
@@ -1516,6 +1747,12 @@ export async function mountSimulationPanel(container: HTMLElement): Promise<void
   mapMsg.textContent = "";
   chartEl.innerHTML = `<p class="sim-velo__chart-empty">Chargement du GPX…</p>`;
   statsEl.textContent = "";
+  const swimSummaryEl = root.querySelector<HTMLElement>("#sim-swim-summary");
+  if (swimSummaryEl) swimSummaryEl.innerHTML = buildSwimSummaryHtml();
+  const t1SummaryEl = root.querySelector<HTMLElement>("#sim-t1-summary");
+  if (t1SummaryEl) t1SummaryEl.innerHTML = buildT1SummaryHtml();
+  const t2SummaryEl = root.querySelector<HTMLElement>("#sim-t2-summary");
+  if (t2SummaryEl) t2SummaryEl.innerHTML = buildT2SummaryHtml(simRunEtaCache?.bikeOffsetS ?? 0);
   bikeTableEl.innerHTML = `<p class="sim-velo__km-eta-empty">Chargement de l'estimation vélo…</p>`;
   runTableEl.innerHTML = `<p class="sim-velo__km-eta-empty">Chargement de l'estimation course…</p>`;
 
@@ -1569,6 +1806,16 @@ export async function mountSimulationPanel(container: HTMLElement): Promise<void
     pointsRun.map((p) => p.eleM),
     3500
   );
+
+  // Prépend le segment natation (flat, 3.8 km) au profil combiné vélo+course.
+  const swimEle = pointsVelo[0]?.eleM ?? 0;
+  const swimEndAbsM = SWIM_DIST_M;
+  const bikeEndAbsM = bikeEndM + SWIM_DIST_M;
+  const distMaxAbsM = distMaxM + SWIM_DIST_M;
+  const profSwimD = [0, ...prof.d.map((d) => d + SWIM_DIST_M)];
+  const profSwimE = [swimEle, ...prof.e];
+  const swimSplitIndex = 1;
+  const bikeSplitIndex = 1 + prof.splitIndex;
   let selection: { aM: number; bM: number } | null = null;
   let navApi: MapNavApi | null = null;
   let unbindChart: (() => void) | null = null;
@@ -1585,31 +1832,32 @@ export async function mountSimulationPanel(container: HTMLElement): Promise<void
   }
 
   function currentProfileForChart(): {
-    distMaxM: number;
-    bikeEndM: number;
+    distMaxAbsM: number;
+    bikeEndAbsM: number;
     distancesM: number[];
     elevationsM: number[];
     dualLeg?: { splitIndex: number };
+    triLeg?: { swimSplitIndex: number; bikeSplitIndex: number };
     offsetAbsM: number;
   } {
     if (!selection) {
       return {
-        distMaxM,
-        bikeEndM,
-        distancesM: prof.d,
-        elevationsM: prof.e,
-        dualLeg: { splitIndex: prof.splitIndex },
+        distMaxAbsM,
+        bikeEndAbsM,
+        distancesM: profSwimD,
+        elevationsM: profSwimE,
+        triLeg: { swimSplitIndex, bikeSplitIndex },
         offsetAbsM: 0,
       };
     }
-    const a = Math.max(0, Math.min(distMaxM, selection.aM));
-    const b = Math.max(0, Math.min(distMaxM, selection.bM));
+    const a = Math.max(0, Math.min(distMaxAbsM, selection.aM));
+    const b = Math.max(0, Math.min(distMaxAbsM, selection.bM));
     const lo = Math.min(a, b);
     const hi = Math.max(a, b);
-    const dAll = prof.d;
-    const eAll = prof.e;
+    const dAll = profSwimD;
+    const eAll = profSwimE;
     if (dAll.length < 2) {
-      return { distMaxM, bikeEndM, distancesM: dAll, elevationsM: eAll, dualLeg: { splitIndex: prof.splitIndex }, offsetAbsM: 0 };
+      return { distMaxAbsM, bikeEndAbsM, distancesM: dAll, elevationsM: eAll, triLeg: { swimSplitIndex, bikeSplitIndex }, offsetAbsM: 0 };
     }
     let i0 = firstIndexGte(dAll, lo);
     i0 = Math.max(0, Math.min(i0, dAll.length - 2));
@@ -1622,21 +1870,29 @@ export async function mountSimulationPanel(container: HTMLElement): Promise<void
     const dSlice = dSliceAbs.map((x) => x - offsetAbsM);
     const distMaxSel = dSlice[dSlice.length - 1] ?? 0;
 
-    const bikeEndRel = bikeEndM - offsetAbsM;
+    const bikeEndRel = bikeEndAbsM - offsetAbsM;
     let dualLeg: { splitIndex: number } | undefined;
     if (bikeEndRel > 1e-6 && bikeEndRel < distMaxSel - 1e-6) {
       const si = firstIndexGte(dSlice, bikeEndRel);
       dualLeg = { splitIndex: Math.max(0, Math.min(si, dSlice.length - 1)) };
     }
-    return { distMaxM: distMaxSel, bikeEndM: bikeEndRel, distancesM: dSlice, elevationsM: eSlice, dualLeg, offsetAbsM };
+    return { distMaxAbsM: distMaxSel, bikeEndAbsM: bikeEndRel, distancesM: dSlice, elevationsM: eSlice, dualLeg, offsetAbsM };
   }
 
   function renderSelectedProfile(): void {
     const p = currentProfileForChart();
-    chartEl!.innerHTML = buildAltitudeProfileSvg(p.distancesM, p.elevationsM, p.dualLeg, {
-      offsetAbsM: p.offsetAbsM,
-      bikeEndAbsM: bikeEndM,
-    });
+    chartEl!.innerHTML = buildAltitudeProfileSvg(
+      p.distancesM,
+      p.elevationsM,
+      p.dualLeg,
+      p.triLeg,
+      {
+        offsetAbsM: p.offsetAbsM,
+        swimEndAbsM: swimEndAbsM,
+        bikeEndAbsM: bikeEndAbsM,
+        zoomed: selection !== null,
+      }
+    );
     resetZoomBtn!.hidden = selection === null;
   }
 
@@ -1648,11 +1904,11 @@ export async function mountSimulationPanel(container: HTMLElement): Promise<void
     const p = currentProfileForChart();
     unbindChart = bindAltitudeChartInteraction(
       svg,
-      p.distMaxM,
+      p.distMaxAbsM,
       p.offsetAbsM,
-      bikeEndM,
-      prof.d,
-      prof.e,
+      bikeEndAbsM,
+      profSwimD,
+      profSwimE,
       (aAbs, bAbs) => {
         selection = { aM: aAbs, bM: bAbs };
         navApi?.setSelectionRangeM(aAbs, bAbs);
