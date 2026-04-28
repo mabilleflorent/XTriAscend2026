@@ -1214,13 +1214,31 @@ function buildAltitudeProfileSvg(
         const x0 = toX(a);
         const x1 = toX(b);
         const yTopBand = Math.min(yBot, toY((e0 + e1) / 2));
+        const w = Math.max(0.8, x1 - x0);
+        const h = Math.max(0, yBot - yTopBand);
+        const title = `${c.name} · ${segStartKm.toLocaleString("fr-FR", { maximumFractionDigits: 2 })}-${segEndKm.toLocaleString(
+          "fr-FR",
+          { maximumFractionDigits: 2 }
+        )} km · ${grade.toLocaleString("fr-FR", { maximumFractionDigits: 1 })}%`;
         rects.push(
-          `<rect x="${x0.toFixed(2)}" y="${yTopBand.toFixed(2)}" width="${Math.max(0.8, x1 - x0).toFixed(
+          `<rect x="${x0.toFixed(2)}" y="${yTopBand.toFixed(2)}" width="${w.toFixed(
             2
-          )}" height="${Math.max(0, yBot - yTopBand).toFixed(2)}" fill="${fill}" opacity="0.88" stroke="rgba(255,255,255,0.75)" stroke-width="1"><title>${escapeHtml(
-            `${c.name} · ${(segStartKm).toLocaleString("fr-FR", { maximumFractionDigits: 2 })}-${(segEndKm).toLocaleString("fr-FR", { maximumFractionDigits: 2 })} km · ${grade.toLocaleString("fr-FR", { maximumFractionDigits: 1 })}%`
+          )}" height="${h.toFixed(2)}" fill="${fill}" opacity="0.88" stroke="rgba(255,255,255,0.75)" stroke-width="1"><title>${escapeHtml(
+            title
           )}</title></rect>`
         );
+
+        // Afficher la pente moyenne dans la bande (si suffisamment large).
+        if (w >= 18 && h >= 16) {
+          const xMid = x0 + w / 2;
+          const yTxt = Math.min(yBot - 10, Math.max(PAD.t + 14, yTopBand + 14));
+          const gLabel = `${Math.round(grade)}%`;
+          rects.push(
+            `<text class="sim-alt-grade-label" x="${xMid.toFixed(2)}" y="${yTxt.toFixed(
+              2
+            )}" text-anchor="middle" dominant-baseline="middle">${escapeHtml(gLabel)}</text>`
+          );
+        }
       }
     }
     return rects.length ? `<g class="sim-alt-grade-bands" aria-hidden="true">${rects.join("")}</g>` : "";
@@ -1231,6 +1249,16 @@ function buildAltitudeProfileSvg(
       `<polyline points="${pts}" fill="none" stroke="${color}" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>`;
     const pts = (from: number, to: number) =>
       distancesM.slice(from, to + 1).map((d, j) => `${toX(d).toFixed(1)},${toY(elevationsM[from + j]).toFixed(1)}`).join(" ");
+    const idxGte = (arr: number[], v: number): number => {
+      let lo = 0;
+      let hi = Math.max(0, arr.length - 1);
+      while (lo < hi) {
+        const mid = Math.floor((lo + hi) / 2);
+        if ((arr[mid] ?? 0) >= v) hi = mid;
+        else lo = mid + 1;
+      }
+      return lo;
+    };
     if (triLeg) {
       const si = Math.min(Math.max(0, triLeg.swimSplitIndex), n - 1);
       const bi = Math.min(Math.max(si, triLeg.bikeSplitIndex), n - 1);
@@ -1240,6 +1268,50 @@ function buildAltitudeProfileSvg(
       const si = Math.min(Math.max(0, dualLeg.splitIndex), n - 1);
       return [poly(pts(0, si), CHART_COLOR_BIKE), poly(pts(si, n - 1), CHART_COLOR_RUN)].join("\n");
     }
+
+    // Cas zoom / sous-sélection : si on est entièrement dans une discipline, garder la bonne couleur.
+    // Si on coupe des frontières (natation→vélo ou vélo→course), segmenter dynamiquement.
+    if (xLabelRef) {
+      const swimRel = (xLabelRef.swimEndAbsM ?? 0) - (xLabelRef.offsetAbsM ?? 0);
+      const bikeRel = (xLabelRef.bikeEndAbsM ?? 0) - (xLabelRef.offsetAbsM ?? 0);
+      const distMaxRel = distancesM[n - 1] ?? 0;
+      const crossesSwim = swimRel > 1e-6 && swimRel < distMaxRel - 1e-6;
+      const crossesBike = bikeRel > 1e-6 && bikeRel < distMaxRel - 1e-6;
+
+      // Pas de coupure : déduire la discipline à partir de la position absolue.
+      if (!crossesSwim && !crossesBike) {
+        const absStart = (xLabelRef.offsetAbsM ?? 0) + (distancesM[0] ?? 0);
+        const absEnd = (xLabelRef.offsetAbsM ?? 0) + distMaxRel;
+        if ((xLabelRef.swimEndAbsM ?? 0) > 1e-6 && absEnd <= (xLabelRef.swimEndAbsM ?? 0) + 1e-6) {
+          return poly(pts(0, n - 1), CHART_COLOR_SWIM);
+        }
+        if ((xLabelRef.bikeEndAbsM ?? 0) > 1e-6 && absStart >= (xLabelRef.bikeEndAbsM ?? 0) - 1e-6) {
+          return poly(pts(0, n - 1), CHART_COLOR_RUN);
+        }
+        return poly(pts(0, n - 1), CHART_COLOR_BIKE);
+      }
+
+      // Coupure(s) : construire les segments dans l'ordre.
+      const parts: string[] = [];
+      let a = 0;
+      if (crossesSwim) {
+        const si = Math.min(Math.max(1, idxGte(distancesM, swimRel)), n - 1);
+        parts.push(poly(pts(0, si), CHART_COLOR_SWIM));
+        a = si;
+      }
+      if (crossesBike) {
+        const bi = Math.min(Math.max(a + 1, idxGte(distancesM, bikeRel)), n - 1);
+        parts.push(poly(pts(a, bi), CHART_COLOR_BIKE));
+        a = bi;
+      }
+      if (a < n - 1) {
+        // Si on a déjà passé bikeRel → course, sinon vélo.
+        const afterBike = bikeRel > 1e-6 && (distancesM[a] ?? 0) >= bikeRel - 1e-6;
+        parts.push(poly(pts(a, n - 1), afterBike ? CHART_COLOR_RUN : CHART_COLOR_BIKE));
+      }
+      return parts.join("\n");
+    }
+
     return poly(pts(0, n - 1), CHART_COLOR_BIKE);
   })();
 
@@ -1365,28 +1437,31 @@ function cumDplusAtDistanceM(distanceM: number, distancesM: number[], cumDplusM:
 /** Texte overlay : vélo = km cumulés parcours ; course = compteur remis à 0 au début du tracé course. */
 function formatAltitudeHoverKm(
   distanceM: number,
+  swimEndM: number,
   bikeEndM: number
-): { line1: string; line2: string; leg: "bike" | "run" } {
+): { line1: string; line2: string; leg: "swim" | "bike" | "run" } {
   const d = Math.max(0, distanceM);
   const fmt = (km: number) =>
     `${km.toLocaleString("fr-FR", { minimumFractionDigits: 3, maximumFractionDigits: 3 })} km`;
+
+  if (swimEndM > 1e-6 && d < swimEndM - 1e-6) {
+    return { line1: fmt(d / 1000), line2: "Natation", leg: "swim" };
+  }
 
   if (bikeEndM > 1e-6 && d >= bikeEndM - 1e-6) {
     const runKm = (d - bikeEndM) / 1000;
     return { line1: fmt(runKm), line2: "Course à pied", leg: "run" };
   }
 
-  return {
-    line1: fmt(d / 1000),
-    line2: bikeEndM > 1e-6 ? "Vélo" : "",
-    leg: "bike",
-  };
+  const bikeKm = swimEndM > 1e-6 ? (d - swimEndM) / 1000 : d / 1000;
+  return { line1: fmt(bikeKm), line2: bikeEndM > 1e-6 ? "Vélo" : "", leg: "bike" };
 }
 
 function bindAltitudeChartInteraction(
   svg: SVGSVGElement,
   distMaxM: number,
   offsetAbsM: number,
+  swimEndAbsM: number,
   bikeEndAbsM: number,
   fullDistancesM: number[],
   fullElevationsM: number[],
@@ -1439,35 +1514,33 @@ function bindAltitudeChartInteraction(
     bg: SVGRectElement | null,
     l1: SVGTextElement | null,
     l2: SVGTextElement | null,
-    leg: "bike" | "run"
+    leg: "swim" | "bike" | "run"
   ): void {
     if (!bg || !l1 || !l2) return;
-    if (leg === "run") {
-      bg.setAttribute("fill", "#f0fdf4");
-      bg.setAttribute("stroke", "#16a34a");
-      l1.setAttribute("fill", "#14532d");
-      l2.setAttribute("fill", "#15803d");
-    } else {
+    if (leg === "swim") {
       bg.setAttribute("fill", "#e8f4ff");
-      bg.setAttribute("stroke", "#1c70e2");
+      bg.setAttribute("stroke", CHART_COLOR_SWIM);
       l1.setAttribute("fill", "#0f3566");
       l2.setAttribute("fill", "#1557b8");
+      return;
     }
+    if (leg === "run") {
+      bg.setAttribute("fill", "#fff1f2");
+      bg.setAttribute("stroke", CHART_COLOR_RUN);
+      l1.setAttribute("fill", "#7f1d1d");
+      l2.setAttribute("fill", "#b91c1c");
+      return;
+    }
+    bg.setAttribute("fill", "#ecfdf5");
+    bg.setAttribute("stroke", CHART_COLOR_BIKE);
+    l1.setAttribute("fill", "#064e3b");
+    l2.setAttribute("fill", "#047857");
   }
 
-  function paintLockedLeg(leg: "bike" | "run"): void {
+  function paintLockedLeg(leg: "swim" | "bike" | "run"): void {
     if (!lockedBg || !lockedL1 || !lockedL2) return;
-    if (leg === "run") {
-      lockedBg.setAttribute("fill", "#ecfdf5");
-      lockedBg.setAttribute("stroke", "#059669");
-      lockedL1.setAttribute("fill", "#064e3b");
-      lockedL2.setAttribute("fill", "#047857");
-    } else {
-      lockedBg.setAttribute("fill", "#e6f2fc");
-      lockedBg.setAttribute("stroke", "#1c70e2");
-      lockedL1.setAttribute("fill", "#0f3566");
-      lockedL2.setAttribute("fill", "#1557b8");
-    }
+    // même palette que le survol, juste un poil plus contrastée
+    paintOverlayLeg(lockedBg, lockedL1, lockedL2, leg);
   }
 
   function updateHoverStackTransform(): void {
@@ -1491,7 +1564,7 @@ function bindAltitudeChartInteraction(
     }
     const dClamped = Math.max(0, Math.min(distMaxM, distanceM));
     const absD = offsetAbsM + dClamped;
-    const { line1, line2, leg } = formatAltitudeHoverKm(absD, bikeEndAbsM);
+    const { line1, line2, leg } = formatAltitudeHoverKm(absD, swimEndAbsM, bikeEndAbsM);
     const dpAbs = cumDplusAtDistanceM(absD, fullDistancesM, cumDplusM);
     const dp = leg === "run" ? Math.max(0, dpAbs - dpAtBikeEnd) : dpAbs;
     const dpStr = Math.round(dp).toLocaleString("fr-FR");
@@ -1777,7 +1850,18 @@ export function getSimulationPanelHtml(): string {
         <p class="sim-velo__map-msg" id="sim-velo-map-msg" hidden></p>
         <div class="sim-velo__chart-block">
           <h4 class="sim-velo__chart-title">Profil altimétrique (altitude GPX)</h4>
-          <p class="sim-velo__chart-hint">Survolez ou faites glisser le doigt : le curseur <strong>orange</strong> (pointillés) et l’encart suivent la position ; l’encart est <strong>bleu</strong> sur le vélo (km cumulés depuis le départ) et <strong>vert</strong> sur la course (compteur <strong>repart à 0</strong> au début du tracé course). <strong>Cliquez</strong> (ou relâchez après un glissement tactile) pour <strong>fixer</strong> la position sur la carte : une <strong>deuxième</strong> ligne en pointillés <strong>indigo</strong> et son encart restent visibles ; le curseur orange continue de suivre le survol. <strong>Alt+clic</strong> sur le graphique pour effacer le repère fixe. Quand la souris quitte le graphique sans repère fixe, le marqueur carte revient au départ vélo.</p>
+          <p class="sim-velo__chart-hint">
+            <strong>Fonctionnalités (implémentées)</strong>
+            <ul class="sim-velo__km-eta-rules">
+              <li><strong>Survol / glissé</strong> : un curseur <strong>orange</strong> suit la position et met à jour l’encart.</li>
+              <li><strong>Repère fixe</strong> : <strong>clic</strong> pour fixer un repère (<strong>indigo</strong>) tout en gardant le survol actif.</li>
+              <li><strong>Effacer</strong> : <strong>Alt+clic</strong> pour supprimer le repère fixe.</li>
+              <li><strong>Carte synchronisée</strong> : le marqueur suit le graphique (retour au départ vélo si la souris sort et qu’aucun repère n’est fixé).</li>
+              <li><strong>Distances triathlon</strong> : l’encart affiche des km <strong>relatifs</strong> à la discipline (nage, vélo, course).</li>
+              <li><strong>Cols</strong> : traits verticaux + noms (et bascule verticale ↔ horizontale selon le zoom).</li>
+              <li><strong>Pente (4 cols)</strong> : bandes de couleur + % moyen par tranche de <strong>500 m</strong> sur Balès, Peyresourde, Val Louron-Azet et Aspin.</li>
+            </ul>
+          </p>
           <div class="sim-velo__chart-actions">
             <button class="sim-velo__chart-btn" id="sim-alt-reset-zoom" type="button" hidden>Réinitialiser le zoom</button>
           </div>
@@ -2071,6 +2155,7 @@ export async function mountSimulationPanel(container: HTMLElement): Promise<void
       svg,
       p.distMaxAbsM,
       p.offsetAbsM,
+      swimEndAbsM,
       bikeEndAbsM,
       profSwimD,
       profSwimE,

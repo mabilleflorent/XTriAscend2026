@@ -690,8 +690,16 @@ body {
   filter: drop-shadow(0 1px 4px rgba(0, 0, 0, 0.1));
 }
 
+.sim-velo__chart-svg .sim-alt-hover-overlay--bike {
+  filter: drop-shadow(0 1px 4px rgba(22, 163, 74, 0.18));
+}
+
 .sim-velo__chart-svg .sim-alt-hover-overlay--run {
-  filter: drop-shadow(0 1px 4px rgba(22, 101, 52, 0.15));
+  filter: drop-shadow(0 1px 4px rgba(248, 113, 113, 0.22));
+}
+
+.sim-velo__chart-svg .sim-alt-hover-overlay--swim {
+  filter: drop-shadow(0 1px 4px rgba(28, 112, 226, 0.22));
 }
 
 .sim-velo__chart {
@@ -794,6 +802,18 @@ body {
   font-size: 0.78rem;
   color: var(--ascend-muted);
   white-space: nowrap;
+}
+
+/* Labels de pente dans les bandes colorées du profil vélo. */
+.sim-alt-grade-label {
+  font-size: 9px;
+  font-weight: 750;
+  fill: rgba(0, 0, 0, 0.85);
+  paint-order: stroke;
+  stroke: rgba(255, 255, 255, 0.92);
+  stroke-width: 3px;
+  stroke-linejoin: round;
+  pointer-events: none;
 }
 
 .sim-velo__km-eta-rules {
