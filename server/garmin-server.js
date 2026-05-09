@@ -824,12 +824,19 @@ async function accumulateGarminActivityIdsWhileScrollingUntil(scrollable, anchor
  * {@link GARMIN_LIST_SCROLL_ANCHOR_ACTIVITY_ID_DEFAULT}. `0` / `off` désactive.
  * @returns {string | null}
  */
-function parseScrollUntilActivityId(req) {
-  const q = singleQueryParam(req.query.scrollUntil) ?? singleQueryParam(req.query.untilActivity);
+function parseScrollUntilActivityIdFromRaw(raw) {
+  const q = typeof raw === "string" ? raw.trim() : "";
   if (q === "0" || q === "off" || q === "false") return null;
-  if (q != null && q !== "") {
+  if (q !== "") {
     return /^\d+$/.test(q) ? q : GARMIN_LIST_SCROLL_ANCHOR_ACTIVITY_ID_DEFAULT;
   }
+  return undefined;
+}
+
+function parseScrollUntilActivityId(req) {
+  const q = singleQueryParam(req.query.scrollUntil) ?? singleQueryParam(req.query.untilActivity);
+  const fromQuery = parseScrollUntilActivityIdFromRaw(q ?? "");
+  if (fromQuery !== undefined) return fromQuery;
   const env = process.env.GARMIN_LIST_SCROLL_UNTIL_ACTIVITY_ID?.trim();
   if (env === "0" || env === "off" || env === "false") return null;
   if (env && /^\d+$/.test(env)) return env;
@@ -1100,22 +1107,25 @@ async function exportGarminActivityFitForIds(page, ids, maxDetails, log, options
 }
 
 const app = express();
+app.use(express.json({ limit: "32kb" }));
 
 /** Évite deux lancements Playwright sur le même user-data-dir (erreur « existing browser session »). */
 let garminLoginInProgress = false;
 /** Évite connexion + étape Playwright UI en parallèle sur le même profil. */
 let garminPlaywrightStep1InProgress = false;
 
-/** CORS minimal pour l’UI locale (Vite) → API locale. */
+/** CORS pour l’UI locale (Vite ou autre origine) → API locale. Sans Origin : * pour les prévols atypiques. */
 app.use((req, res, next) => {
   if (!req.path.startsWith("/api/garmin/")) return next();
   const origin = req.headers.origin;
   if (typeof origin === "string" && origin.length > 0) {
     res.setHeader("Access-Control-Allow-Origin", origin);
     res.setHeader("Vary", "Origin");
-    res.setHeader("Access-Control-Allow-Methods", "GET,POST,OPTIONS");
-    res.setHeader("Access-Control-Allow-Headers", "Content-Type");
+  } else {
+    res.setHeader("Access-Control-Allow-Origin", "*");
   }
+  res.setHeader("Access-Control-Allow-Methods", "GET,POST,OPTIONS");
+  res.setHeader("Access-Control-Allow-Headers", "Content-Type, Accept, Authorization");
   if (req.method === "OPTIONS") {
     res.status(204).end();
     return;
@@ -1351,14 +1361,90 @@ app.get("/api/garmin/export/status", async (_req, res) => {
   });
 });
 
-app.post("/api/garmin/export/start", async (_req, res) => {
+app.post("/api/garmin/export/start", async (req, res) => {
   if (garminLoginInProgress || garminPlaywrightStep1InProgress) {
     res.status(409).json({ error: "busy", inProgress: true, export: garminExportJob, login: garminLoginJob });
     return;
   }
-  void runGarminExportBackground();
-  res.json({ started: true });
+  const body = req.body && typeof req.body === "object" ? req.body : {};
+  const rawScroll =
+    typeof body.scrollUntil === "string"
+      ? body.scrollUntil
+      : typeof body.untilActivity === "string"
+        ? body.untilActivity
+        : typeof body.scrollUntilId === "string"
+          ? body.scrollUntilId
+          : "";
+  const parsed = parseScrollUntilActivityIdFromRaw(rawScroll);
+  const scrollUntilId = parsed === undefined ? GARMIN_LIST_SCROLL_ANCHOR_ACTIVITY_ID_DEFAULT : parsed;
+  void runGarminExportBackground({ scrollUntilId });
+  res.json({ started: true, scrollUntilId });
 });
+
+/**
+ * Efface vraiment la session Garmin : les JSON + le dossier profil Chromium (`launchPersistentContext`).
+ * Sans suppression du profil, Chrome garde les cookies Garmin et la prochaine ouverture reste connectée.
+ * Ne supprime pas public/fit/bike/.
+ */
+async function clearGarminConnectorSession() {
+  garminLoginInProgress = false;
+  garminPlaywrightStep1InProgress = false;
+  const profileDir = getGarminUserDataDir();
+  try {
+    await killProcessesUsingGarminProfileDir(profileDir);
+  } catch {
+    /* best effort : fenêtre Chrome encore ouverte */
+  }
+  await sleep(500);
+  try {
+    await removeChromiumSingletonFiles(profileDir);
+  } catch {
+    /* best effort */
+  }
+  await fs.rm(SESSION_FILE, { force: true });
+  await fs.rm(STORAGE_STATE_FILE, { force: true });
+  try {
+    await fs.rm(profileDir, { recursive: true, force: true });
+  } catch (e) {
+    if (e?.code !== "ENOENT") throw e;
+  }
+}
+
+/** Supprime session fichiers + profil navigateur persistant (reconnexion obligatoire au prochain login). */
+async function handleApiGarminSessionClear(_req, res) {
+  if (garminLoginInProgress || garminPlaywrightStep1InProgress) {
+    res.status(409).json({
+      error: "busy",
+      message: "Attends la fin du login ou de l’export, ou utilise /garmin/hard-reset dans le navigateur.",
+    });
+    return;
+  }
+  const profileLabel = path.basename(getGarminUserDataDir());
+  try {
+    await clearGarminConnectorSession();
+  } catch (e) {
+    res.status(500).json({ error: "clear_failed", message: String(e?.message ?? e) });
+    return;
+  }
+  garminLoginJob = {
+    state: "idle",
+    startedAt: 0,
+    finishedAt: 0,
+    message: "",
+    error: "",
+  };
+  res.json({
+    ok: true,
+    cleared: [
+      ".garmin-session.json",
+      ".garmin-playwright-storage.json",
+      `${profileLabel}/ (profil Chromium Playwright — cookies Garmin)`,
+    ],
+  });
+}
+
+app.post("/api/garmin/session/clear", handleApiGarminSessionClear);
+app.get("/api/garmin/session/clear", handleApiGarminSessionClear);
 
 app.get("/api/garmin/fit/bike/list", async (_req, res) => {
   try {
@@ -1726,7 +1812,19 @@ app.get("/garmin/playwright/step1-activities", async (req, res) => {
 });
 
 app.get("/garmin/logout", async (_req, res) => {
-  await fs.rm(SESSION_FILE, { force: true });
+  try {
+    await clearGarminConnectorSession();
+    garminLoginJob = {
+      state: "idle",
+      startedAt: 0,
+      finishedAt: 0,
+      message: "",
+      error: "",
+    };
+  } catch {
+    await fs.rm(SESSION_FILE, { force: true });
+    await fs.rm(STORAGE_STATE_FILE, { force: true });
+  }
   res.redirect("/");
 });
 
@@ -1781,6 +1879,172 @@ function escapeHtml(s) {
     .replace(/>/g, "&gt;")
     .replace(/\"/g, "&quot;");
 }
+
+// ---------------------------------------------------------------------------
+// Splits Power Guidance — récupération du tableau depuis Garmin Connect
+// ---------------------------------------------------------------------------
+
+const GARMIN_POWER_GUIDANCE_URL =
+  "https://connect.garmin.com/app/power-guidance/create-strategy/452662426/664781";
+
+/** État du job de récupération des splits. */
+let garminSplitsJob = {
+  state: "idle",
+  message: "",
+  error: "",
+  fetchedAt: /** @type {number|null} */ (null),
+  /** @type {{ headers: string[], rows: string[][] }|null} */
+  data: null,
+};
+let garminSplitsInProgress = false;
+
+async function runGarminSplitsFetchBackground() {
+  garminSplitsInProgress = true;
+  garminSplitsJob = { state: "running", message: "Ouverture du navigateur…", error: "", fetchedAt: null, data: null };
+  let context = null;
+  try {
+    context = await launchGarminBrowserContext();
+    await context.addInitScript(() => {
+      Object.defineProperty(navigator, "webdriver", { get: () => undefined });
+    });
+    const page = await context.newPage();
+
+    garminSplitsJob = { ...garminSplitsJob, message: "Navigation vers Power Guidance…" };
+    // eslint-disable-next-line no-console
+    console.log(`[garmin/splits] goto ${GARMIN_POWER_GUIDANCE_URL}`);
+    await page.goto(GARMIN_POWER_GUIDANCE_URL, { waitUntil: "domcontentloaded", timeout: 90_000 });
+    // eslint-disable-next-line no-console
+    console.log(`[garmin/splits] URL apres chargement: ${page.url()}`);
+
+    garminSplitsJob = { ...garminSplitsJob, message: "Attente du slider…" };
+    const sliderLocator = page.locator('[class*="slider_slider__"]').first();
+    await sliderLocator.waitFor({ state: "visible", timeout: 60_000 });
+    // eslint-disable-next-line no-console
+    console.log(`[garmin/splits] Slider trouvé — réglage à 75%`);
+
+    garminSplitsJob = { ...garminSplitsJob, message: "Réglage du slider à 75%…" };
+
+    // Essai 1 : input[type=range] natif à l'intérieur du slider
+    const nativeInput = sliderLocator.locator('input[type="range"]').first();
+    const nativeCount = await nativeInput.count();
+    if (nativeCount > 0) {
+      // Lecture min/max puis injection de la valeur cible via setter natif React
+      const attrs = await nativeInput.evaluate((el) => ({
+        min: parseFloat(el.getAttribute("min") ?? "0"),
+        max: parseFloat(el.getAttribute("max") ?? "100"),
+        step: parseFloat(el.getAttribute("step") ?? "1"),
+      }));
+      const targetVal = attrs.max;
+      await nativeInput.evaluate((el, val) => {
+        const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value")?.set;
+        setter?.call(el, String(val));
+        el.dispatchEvent(new Event("input", { bubbles: true }));
+        el.dispatchEvent(new Event("change", { bubbles: true }));
+      }, targetVal);
+      // eslint-disable-next-line no-console
+      console.log(`[garmin/splits] Slider (input natif) réglé au max : ${targetVal}`);
+    } else {
+      // Essai 2 : clic à 75% de la piste via bounding box
+      const box = await sliderLocator.boundingBox();
+      if (box) {
+        const x = box.x + box.width;
+        const y = box.y + box.height / 2;
+        await page.mouse.click(x, y);
+        // eslint-disable-next-line no-console
+        console.log(`[garmin/splits] Slider (clic bbox au max) x=${x.toFixed(0)} y=${y.toFixed(0)}`);
+      }
+    }
+
+    garminSplitsJob = { ...garminSplitsJob, message: "Attente 20 s (actualisation Garmin)…" };
+    // eslint-disable-next-line no-console
+    console.log(`[garmin/splits] Attente 20 s…`);
+    await page.waitForTimeout(20_000);
+    // eslint-disable-next-line no-console
+    console.log(`[garmin/splits] Attente terminée — extraction du tableau`);
+
+    garminSplitsJob = { ...garminSplitsJob, message: "Attente du tableau des splits…" };
+    await page.waitForSelector('table[class*="SortableTable_table__"]', { timeout: 30_000 });
+
+    garminSplitsJob = { ...garminSplitsJob, message: "Extraction du tableau…" };
+    const tableData = await page.evaluate(() => {
+      const table = document.querySelector('table[class*="SortableTable_table__"]');
+      if (!table) return null;
+
+      const headers = [];
+      const thead = table.querySelector("thead");
+      if (thead) {
+        thead.querySelectorAll("th").forEach((th) => {
+          headers.push(th.textContent?.trim() ?? "");
+        });
+      }
+
+      const rows = [];
+      const tbody = table.querySelector("tbody");
+      if (tbody) {
+        tbody.querySelectorAll("tr").forEach((tr) => {
+          const cells = [];
+          tr.querySelectorAll("td, th").forEach((td) => {
+            cells.push(td.textContent?.trim() ?? "");
+          });
+          if (cells.length > 0) rows.push(cells);
+        });
+      }
+
+      return { headers, rows };
+    });
+
+    await context.close();
+    context = null;
+
+    if (!tableData) {
+      garminSplitsJob = {
+        state: "error",
+        message: "Tableau non trouvé sur la page.",
+        error: "table_not_found",
+        fetchedAt: Date.now(),
+        data: null,
+      };
+      return;
+    }
+
+    // eslint-disable-next-line no-console
+    console.log(`[garmin/splits] ${tableData.rows.length} lignes extraites.`);
+    garminSplitsJob = {
+      state: "success",
+      message: `${tableData.rows.length} ligne(s) extraite(s).`,
+      error: "",
+      fetchedAt: Date.now(),
+      data: tableData,
+    };
+  } catch (e) {
+    await context?.close().catch(() => {});
+    context = null;
+    // eslint-disable-next-line no-console
+    console.error(`[garmin/splits] Erreur: ${e?.message ?? e}`);
+    garminSplitsJob = {
+      state: "error",
+      message: "Erreur lors de la récupération.",
+      error: String(e?.message ?? e),
+      fetchedAt: Date.now(),
+      data: null,
+    };
+  } finally {
+    garminSplitsInProgress = false;
+  }
+}
+
+app.post("/api/garmin/splits/fetch", (req, res) => {
+  if (garminLoginInProgress || garminPlaywrightStep1InProgress || garminSplitsInProgress) {
+    res.status(409).json({ error: "busy", inProgress: true });
+    return;
+  }
+  void runGarminSplitsFetchBackground();
+  res.json({ started: true });
+});
+
+app.get("/api/garmin/splits/status", (_req, res) => {
+  res.json({ ...garminSplitsJob, inProgress: garminSplitsInProgress });
+});
 
 app.listen(PORT, HOST, () => {
   // eslint-disable-next-line no-console

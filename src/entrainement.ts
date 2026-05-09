@@ -3,6 +3,14 @@ import {
   getVmaCapKmh,
 } from "./athlete-settings";
 import { ATHLETE_SETTINGS_CHANGED } from "./athlete-settings-rail";
+import { garminServerBase } from "./garmin-server-url";
+import {
+  formatDate,
+  formatDurationSeconds,
+  formatActivityDate,
+  normalizeDateMs,
+  formatPaceFromDurationDistance,
+} from "./calc-utils";
 
 export type Discipline = "natation" | "velo" | "course";
 
@@ -274,23 +282,6 @@ async function sha256Hex(ab: ArrayBuffer): Promise<string> {
   return out;
 }
 
-function formatDate(ts: number): string {
-  return new Date(ts).toLocaleString("fr-FR", {
-    dateStyle: "short",
-    timeStyle: "short",
-  });
-}
-
-function formatDurationSeconds(totalSeconds: number): string {
-  const s = Math.max(0, Math.round(totalSeconds));
-  const h = Math.floor(s / 3600);
-  const m = Math.floor((s % 3600) / 60);
-  const sec = s % 60;
-  if (h > 0) return `${h} h ${String(m).padStart(2, "0")} min`;
-  if (m > 0) return `${m} min ${String(sec).padStart(2, "0")} s`;
-  return `${sec} s`;
-}
-
 function formatNumber(n: number, digits = 1): string {
   return n.toLocaleString("fr-FR", { maximumFractionDigits: digits });
 }
@@ -517,12 +508,6 @@ export async function mountEntrainementPanel(container: HTMLElement): Promise<vo
     })();
   });
 
-}
-
-function garminServerBase(): string {
-  const raw = import.meta.env.VITE_GARMIN_SERVER_URL?.trim();
-  if (raw) return raw.replace(/\/$/, "");
-  return "http://127.0.0.1:8787";
 }
 
 let garminBikeFolderBootstrapStarted = false;
@@ -848,15 +833,6 @@ function inferDisciplineFromFit(
   return null;
 }
 
-function normalizeDateMs(v: unknown): number | undefined {
-  if (v instanceof Date) return v.getTime();
-  if (typeof v === "string" || typeof v === "number") {
-    const d = new Date(v as any);
-    const ms = d.getTime();
-    return Number.isFinite(ms) ? ms : undefined;
-  }
-  return undefined;
-}
 
 /**
  * Construit le résumé décodé depuis les messages @garmin/fitsdk.
@@ -1115,15 +1091,6 @@ function computeRunLoad(durationS: number, distanceKm: number, vmaKmh: number): 
   const avgSpeedKmh = distanceKm / (durationS / 3600);
   const IF = avgSpeedKmh / vmaKmh;
   return (durationS / 3600) * IF * IF * 100;
-}
-
-function formatPaceFromDurationDistance(durationS: number, distanceKm: number): string {
-  if (distanceKm <= 0) return "—";
-  const minPerKm = durationS / 60 / distanceKm;
-  const totalSec = Math.round(minPerKm * 60);
-  const m = Math.floor(totalSec / 60);
-  const s = totalSec % 60;
-  return `${m}:${String(s).padStart(2, "0")}/km`;
 }
 
 // ─── Graphique Vélo ────────────────────────────────────────────────────────────
@@ -1623,10 +1590,6 @@ async function refreshAllUploadLists(): Promise<void> {
   await renderVeloChart(root);
   await renderCourseChart(root);
   await refreshFtpFromVeloSessionsBadge();
-}
-
-function formatActivityDate(ms: number): string {
-  return new Date(ms).toLocaleDateString("fr-FR", { dateStyle: "medium" });
 }
 
 function renderVeloCategorySelect(sessionId: string, stored: VeloCategory | undefined): string {

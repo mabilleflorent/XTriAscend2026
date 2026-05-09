@@ -413,9 +413,76 @@ body {
   gap: 0.5rem;
 }
 
+.garmin-local__login-row {
+  display: flex;
+  flex: 1 1 100%;
+  width: 100%;
+  gap: 0.5rem;
+  align-items: stretch;
+}
+
+.garmin-local__login-row .garmin-local__btn {
+  margin-top: 0;
+}
+
+.garmin-local__login-row .garmin-local__btn:not(.garmin-local__btn--icon) {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.garmin-local__btn--icon {
+  flex: 0 0 auto;
+  width: 2.5rem;
+  min-width: 2.5rem;
+  padding: 0.45rem;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--ascend-text-tertiary);
+}
+
+.garmin-local__btn--icon:hover {
+  color: #b91c1c;
+  border-color: #fecaca;
+  background: #fef2f2;
+}
+
+.garmin-local__icon-trash {
+  display: block;
+  flex-shrink: 0;
+}
+
+.athlete-settings-rail--bar .garmin-local__login-row {
+  flex: 1 1 100%;
+}
+
+.garmin-local__scroll-anchor {
+  margin-top: 0.65rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.garmin-local__scroll-anchor-label {
+  font-size: 0.72rem;
+  font-weight: 600;
+  color: var(--ascend-text-tertiary);
+}
+
+.garmin-local__scroll-anchor-input {
+  width: 100%;
+  max-width: 16rem;
+  padding: 0.45rem 0.5rem;
+  font-size: 0.78rem;
+  border: 1px solid var(--ascend-border);
+  border-radius: 8px;
+  background: var(--ascend-surface);
+  color: var(--ascend-text);
+}
+
 .garmin-local__btn {
   width: 100%;
-  margin-top: 0.5rem;
+  margin-top: 0;
   padding: 0.55rem 0.65rem;
   font-size: 0.8rem;
   border: 1px solid var(--ascend-border);
@@ -428,10 +495,6 @@ body {
 .athlete-settings-rail--bar .garmin-local__btn {
   width: auto;
   flex: 1 1 11rem;
-  margin-top: 0;
-}
-
-.garmin-local__btn:first-of-type {
   margin-top: 0;
 }
 
@@ -831,6 +894,127 @@ body {
   border-radius: 8px;
   background: var(--ascend-surface);
 }
+
+/* Conteneur flex côte-à-côte : tableau vélo estimé + tableau splits Garmin */
+.sim-velo__km-eta-tables-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1.5rem;
+  align-items: flex-start;
+}
+
+.sim-velo__km-eta-tables-row > .sim-velo__km-eta-table-wrap {
+  flex: 1 1 280px;
+  min-width: 240px;
+}
+
+/* Bloc splits Garmin Power Guidance */
+.sim-garmin-splits {
+  flex: 1 1 280px;
+  min-width: 240px;
+}
+
+.sim-garmin-splits__title {
+  margin-top: 0;
+  margin-bottom: 0.5rem;
+}
+
+.sim-garmin-splits__table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.82rem;
+}
+
+.sim-garmin-splits__th,
+.sim-garmin-splits__td {
+  padding: 0.4rem 0.55rem;
+  text-align: left;
+  border-bottom: 1px solid var(--ascend-border-faint);
+}
+
+.sim-garmin-splits__th {
+  font-weight: 600;
+  background: var(--ascend-surface-alt, #f9fafb);
+  color: var(--ascend-text-secondary);
+  font-size: 0.78rem;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+.sim-garmin-splits__table tr:last-child td {
+  border-bottom: none;
+}
+
+.sim-garmin-splits__tr--total td {
+  font-weight: 700;
+  border-top: 2px solid var(--ascend-border-soft);
+  background: var(--ascend-surface-alt, #f9fafb);
+}
+
+/* Colonne différence Garmin dans le tableau vélo estimé */
+.sim-bike-diff {
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+}
+
+.sim-bike-diff--pos {
+  color: #b45309; /* en retard sur Garmin */
+}
+
+.sim-bike-diff--neg {
+  color: #16a34a; /* en avance sur Garmin */
+}
+
+/* Barre de toggles colonnes */
+.sim-garmin-splits__toggles {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.3rem;
+  margin-bottom: 0.55rem;
+}
+
+.sim-garmin-splits__toggle {
+  padding: 0.2rem 0.55rem;
+  font-size: 0.7rem;
+  font-weight: 600;
+  border: 1px solid var(--ascend-border);
+  border-radius: 20px;
+  background: var(--ascend-surface);
+  color: var(--ascend-text-secondary);
+  cursor: pointer;
+  white-space: nowrap;
+  max-width: 10rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  transition: background 0.15s, color 0.15s, opacity 0.15s;
+}
+
+.sim-garmin-splits__toggle:hover {
+  background: var(--ascend-border-faint);
+}
+
+.sim-garmin-splits__toggle--off {
+  opacity: 0.35;
+  text-decoration: line-through;
+}
+
+/* Masquage de colonnes par index (data-col="N") */
+.sim-garmin-splits__table--hide-col-0  [data-col="0"]  { display: none; }
+.sim-garmin-splits__table--hide-col-1  [data-col="1"]  { display: none; }
+.sim-garmin-splits__table--hide-col-2  [data-col="2"]  { display: none; }
+.sim-garmin-splits__table--hide-col-3  [data-col="3"]  { display: none; }
+.sim-garmin-splits__table--hide-col-4  [data-col="4"]  { display: none; }
+.sim-garmin-splits__table--hide-col-5  [data-col="5"]  { display: none; }
+.sim-garmin-splits__table--hide-col-6  [data-col="6"]  { display: none; }
+.sim-garmin-splits__table--hide-col-7  [data-col="7"]  { display: none; }
+.sim-garmin-splits__table--hide-col-8  [data-col="8"]  { display: none; }
+.sim-garmin-splits__table--hide-col-9  [data-col="9"]  { display: none; }
+.sim-garmin-splits__table--hide-col-10 [data-col="10"] { display: none; }
+.sim-garmin-splits__table--hide-col-11 [data-col="11"] { display: none; }
+.sim-garmin-splits__table--hide-col-12 [data-col="12"] { display: none; }
+.sim-garmin-splits__table--hide-col-13 [data-col="13"] { display: none; }
+.sim-garmin-splits__table--hide-col-14 [data-col="14"] { display: none; }
+.sim-garmin-splits__table--hide-col-15 [data-col="15"] { display: none; }
 
 .sim-velo__km-eta-table {
   width: 100%;

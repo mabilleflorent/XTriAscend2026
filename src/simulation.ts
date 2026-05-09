@@ -1,6 +1,7 @@
 /** Page Simulation : parcours vélo depuis GPX, carte OpenStreetMap (Leaflet), profil altimétrique. */
 
 import {
+  getBikeFatiguePctPerHour,
   getFtp,
   getRaceStartHourMinute,
   getSwimPaceSecPer100m,
@@ -11,6 +12,27 @@ import {
   getVmaCapKmh,
 } from "./athlete-settings";
 import { ATHLETE_SETTINGS_CHANGED } from "./athlete-settings-rail";
+import {
+  type GpxTrackPoint,
+  haversineM,
+  cumulativeDistancesM,
+  positionAtDistanceM,
+  smoothElevationProfileM,
+  mergeBikeRunProfile,
+  cumDplusAtDistanceM,
+  solveSteadyBikeSpeedMps,
+  formatEtaSplitTime,
+  formatPaceMinPerKm,
+  formatClockFromRaceStart,
+  niceAxisStepM,
+  formatDistanceKmLabel,
+  formatLegDistanceKmLabel,
+  formatAltitudeHoverKm,
+} from "./calc-utils";
+import { GARMIN_SPLITS_STORAGE_KEY, GARMIN_SPLITS_UPDATED_EVENT } from "./garmin-local";
+import { isStrictLocalhost } from "./local-only";
+export type { GpxTrackPoint } from "./calc-utils";
+export { cumulativeDistancesM } from "./calc-utils";
 
 const GPX_VELO_URL = "/gpx/velo/parcours.gpx";
 const GPX_RUN_URL = "/gpx/run/parcours.gpx";
@@ -103,7 +125,6 @@ function ensureLeaflet(): Promise<any> {
   return leafletLoadPromise;
 }
 
-export type GpxTrackPoint = { lat: number; lng: number; eleM: number };
 
 function escapeHtml(s: string): string {
   return s
@@ -190,17 +211,6 @@ ${(() => {
   return items.join("\n");
 }
 
-function haversineM(a: { lat: number; lng: number }, b: { lat: number; lng: number }): number {
-  const R = 6371000;
-  const toR = Math.PI / 180;
-  const dLat = (b.lat - a.lat) * toR;
-  const dLng = (b.lng - a.lng) * toR;
-  const x =
-    Math.sin(dLat / 2) ** 2 +
-    Math.cos(a.lat * toR) * Math.cos(b.lat * toR) * Math.sin(dLng / 2) ** 2;
-  return 2 * R * Math.asin(Math.min(1, Math.sqrt(x)));
-}
-
 /**
  * Moyenne glissante sur le profil brut (m) : réduit le bruit altimétrique GPX / baro.
  * Sans lissage, la somme des petites montées/descentes artificielles entre points gonfle
@@ -208,27 +218,7 @@ function haversineM(a: { lat: number; lng: number }, b: { lat: number; lng: numb
  */
 const GPX_ELEV_SMOOTH_HALF_WINDOW = 4;
 
-function smoothElevationProfileM(eleM: number[], halfWindow: number): number[] {
-  const n = eleM.length;
-  if (n === 0) return [];
-  const w = Math.max(0, Math.min(halfWindow, Math.floor((n - 1) / 2)));
-  const out = new Array<number>(n);
-  for (let i = 0; i < n; i++) {
-    const j0 = Math.max(0, i - w);
-    const j1 = Math.min(n - 1, i + w);
-    let s = 0;
-    for (let j = j0; j <= j1; j++) s += eleM[j];
-    out[i] = s / (j1 - j0 + 1);
-  }
-  return out;
-}
-
 /** Modèle statique vélo : P·η = Mg(sinα+Crr·cosα)·V + ½·ρ·CdA·V³ — constantes demandées. */
-const BIKE_ETA = 0.97;
-const BIKE_G = 9.81;
-const BIKE_CRR = 0.005;
-const BIKE_RHO = 1.15;
-const BIKE_CDA = 0.32;
 
 /**
  * Vitesse max en descente (km/h), convertie en m/s pour le plafonnement segment par segment.
@@ -237,44 +227,14 @@ const BIKE_CDA = 0.32;
 const BIKE_DESCENT_MAX_SPEED_KMH = 50;
 const BIKE_DESCENT_MAX_SPEED_MPS = BIKE_DESCENT_MAX_SPEED_KMH / 3.6;
 
+// Vitesse (m/s) steady-state vélo (solveSteadyBikeSpeedMps) et formatEtaSplitTime → voir calc-utils.ts.
+
 /**
  * Vitesse (m/s) solution de P·η = Mg(sinα+Crr cosα)·V + ½ ρ CdA V³.
  * Dichotomie sur [Vlo, Vhi] (robuste si la pente rend k négatif).
  */
-function solveSteadyBikeSpeedMps(powerW: number, alphaRad: number, massKg: number): number {
-  const Peff = powerW * BIKE_ETA;
-  const c = 0.5 * BIKE_RHO * BIKE_CDA;
-  const k = massKg * BIKE_G * (Math.sin(alphaRad) + BIKE_CRR * Math.cos(alphaRad));
-  const f = (V: number) => c * V * V * V + k * V - Peff;
 
-  let lo = 0.2;
-  let hi = 30;
-  if (f(lo) >= 0) return lo;
-  while (hi < 200 && f(hi) < 0) hi += 10;
-  if (f(hi) < 0) return hi;
-
-  for (let i = 0; i < 80; i++) {
-    const mid = (lo + hi) / 2;
-    if (f(mid) < 0) lo = mid;
-    else hi = mid;
-  }
-  return Math.max(0.3, (lo + hi) / 2);
-}
-
-function formatEtaSplitTime(totalSeconds: number): string {
-  const s = Math.max(0, totalSeconds);
   /** Arrondir d’abord le total en secondes (évite « 3 min 60 s » quand s % 60 arrondit à 60). */
-  const totalSec = Math.round(s);
-  const m = Math.floor(totalSec / 60);
-  const sec = totalSec % 60;
-  if (m >= 60) {
-    const h = Math.floor(m / 60);
-    const m2 = m % 60;
-    return `${h} h ${String(m2).padStart(2, "0")} min ${String(sec).padStart(2, "0")} s`;
-  }
-  return `${m} min ${String(sec).padStart(2, "0")} s`;
-}
-
 type KmBucket = { timeS: number; horizM: number };
 
 /** Fatigue : multiplicateur de temps linéaire avec le temps déjà couru (ex. +5 % par heure écoulée au début du km). */
@@ -441,7 +401,8 @@ export function computeBikeKmEtaRows(
   pointsVelo: GpxTrackPoint[],
   distVelo: number[],
   powerW: number,
-  massKg: number
+  massKg: number,
+  fatiguePctPerHour = 0
 ): BikeKmEtaRow[] {
   const bikeEndM = distVelo[distVelo.length - 1] ?? 0;
   if (pointsVelo.length < 2 || bikeEndM <= 0) return [];
@@ -453,6 +414,9 @@ export function computeBikeKmEtaRows(
     pointsVelo.map((p) => p.eleM),
     GPX_ELEV_SMOOTH_HALF_WINDOW
   );
+
+  const fatiguePerSec = fatiguePctPerHour / 100 / 3600;
+  let cumBikeTimeS = 0;
 
   for (let i = 0; i < pointsVelo.length - 1; i++) {
     const p0 = pointsVelo[i];
@@ -467,11 +431,14 @@ export function computeBikeKmEtaRows(
     addHorizDplusDminusToBuckets(eleBuckets, d0, d1, horiz, dPlusSeg, dMinusSeg);
     const alpha = Math.atan2(dele, horiz);
     const slant = Math.sqrt(horiz * horiz + dele * dele);
-    let V = solveSteadyBikeSpeedMps(powerW, alpha, massKg);
+    // Puissance effective : réduite par la fatigue cumulée (plancher à 50 % du FTP)
+    const fatigueFactor = Math.max(0.5, 1 - fatiguePerSec * cumBikeTimeS);
+    let V = solveSteadyBikeSpeedMps(powerW * fatigueFactor, alpha, massKg);
     if (dele < -1e-9) {
       V = Math.min(V, BIKE_DESCENT_MAX_SPEED_MPS);
     }
     const tSeg = slant / V;
+    cumBikeTimeS += tSeg;
     addSegmentTimeToKmBuckets(buckets, d0, d1, horiz, tSeg);
   }
 
@@ -646,29 +613,6 @@ export function computeRunKmEtaRows(
   return rows;
 }
 
-function formatPaceMinPerKm(minPerKm: number): string {
-  if (!Number.isFinite(minPerKm) || minPerKm <= 0) return "—";
-  /** Arrondir le temps total en secondes, puis min/s — évite « 4:60 » si on arrondit les secondes du reste seul. */
-  const totalSec = Math.round(minPerKm * 60);
-  const m = Math.floor(totalSec / 60);
-  const s = totalSec % 60;
-  return `${m}:${String(s).padStart(2, "0")} / km`;
-}
-
-/** Heure après `offsetSec` depuis le départ (minuit + départ course), avec jour(s) supplémentaires si besoin. */
-function formatClockFromRaceStart(offsetSec: number, startH: number, startM: number): string {
-  if (!Number.isFinite(offsetSec) || offsetSec < 0) return "—";
-  const startSec = startH * 3600 + startM * 60;
-  let x = startSec + offsetSec;
-  const day = Math.floor(x / 86400);
-  x = ((x % 86400) + 86400) % 86400;
-  const hh = Math.floor(x / 3600);
-  const mm = Math.floor((x % 3600) / 60);
-  const ss = Math.floor(x % 60);
-  const pad = (n: number) => String(n).padStart(2, "0");
-  const clock = `${pad(hh)}:${pad(mm)}:${pad(ss)}`;
-  return day > 0 ? `${clock} (+${day} j)` : clock;
-}
 
 /** ~14 m de D+ ou D− par « palier » de barre (jusqu’à 8 barres). */
 const ELEV_METER_M_PER_BAR = 14;
@@ -797,17 +741,78 @@ function buildT2SummaryHtml(bikeTotalS: number): string {
 </table>`;
 }
 
-function buildBikeKmEtaTableHtml(rows: BikeKmEtaRow[], swimOffsetS = 0): string {
+/**
+ * Construit une fonction d'interpolation linéaire du temps Garmin en fonction du km cumulé.
+ * Retourne null si les colonnes distance/temps ne sont pas détectables.
+ */
+function buildGarminInterpolation(data: GarminSplitsData): ((km: number) => number) | null {
+  const colCount = Math.max(data.headers.length, ...data.rows.map((r) => r.length));
+  const timeColIdx = detectTimeColumnIndex(data.rows, colCount);
+  const distColIdx = detectDistanceColumnIndex(data.headers, data.rows, colCount, timeColIdx);
+  if (timeColIdx < 0 || distColIdx < 0) return null;
+
+  const cumKm: number[] = [0];
+  const cumSec: number[] = [0];
+  for (const row of data.rows) {
+    const km = parseDecimal((row[distColIdx] ?? "").trim());
+    const secs = parseTimeToSeconds((row[timeColIdx] ?? "").trim());
+    if (isNaN(km) || secs === null) continue;
+    cumKm.push(cumKm[cumKm.length - 1] + km);
+    cumSec.push(cumSec[cumSec.length - 1] + secs);
+  }
+  if (cumKm.length < 2) return null;
+
+  return (targetKm: number): number => {
+    if (targetKm <= 0) return 0;
+    const n = cumKm.length;
+    if (targetKm >= cumKm[n - 1]) {
+      // Extrapolation linéaire au-delà du dernier split
+      const dk = cumKm[n - 1] - cumKm[n - 2];
+      const ds = cumSec[n - 1] - cumSec[n - 2];
+      return cumSec[n - 1] + (dk > 1e-9 ? (targetKm - cumKm[n - 1]) * (ds / dk) : 0);
+    }
+    let lo = 0, hi = n - 1;
+    while (hi - lo > 1) { const mid = (lo + hi) >> 1; if (cumKm[mid] <= targetKm) lo = mid; else hi = mid; }
+    const frac = (cumKm[lo + 1] - cumKm[lo]) > 1e-9 ? (targetKm - cumKm[lo]) / (cumKm[lo + 1] - cumKm[lo]) : 0;
+    return cumSec[lo] + frac * (cumSec[lo + 1] - cumSec[lo]);
+  };
+}
+
+function loadGarminSplitsFromStorage(): GarminSplitsData | null {
+  try {
+    const raw = localStorage.getItem(GARMIN_SPLITS_STORAGE_KEY);
+    return raw ? (JSON.parse(raw) as GarminSplitsData) : null;
+  } catch { return null; }
+}
+
+/** Formate une différence de secondes en ±M:SS ou ±H:MM:SS. */
+function formatDiffSeconds(diffS: number): string {
+  const abs = Math.round(Math.abs(diffS));
+  const h = Math.floor(abs / 3600);
+  const m = Math.floor((abs % 3600) / 60);
+  const s = abs % 60;
+  const pad = (n: number) => String(n).padStart(2, "0");
+  const sign = diffS >= 0 ? "+" : "−";
+  return h > 0 ? `${sign}${h}:${pad(m)}:${pad(s)}` : `${sign}${m}:${pad(s)}`;
+}
+
+function buildBikeKmEtaTableHtml(
+  rows: BikeKmEtaRow[],
+  swimOffsetS = 0,
+  garminInterp: ((km: number) => number) | null = null
+): string {
   if (rows.length === 0) {
     return `<p class="sim-velo__km-eta-empty">Pas assez de données vélo pour estimer les temps au km.</p>`;
   }
   const { h: sh, m: sm } = getRaceStartHourMinute();
+  const bikeEndKm = (rows.find((r) => r.isTotal)?.distanceM ?? 0) / 1000;
+  const diffHead = garminInterp ? `\n<th scope="col">Δ Garmin</th>` : "";
   const head = `<thead><tr>
 <th scope="col">Km</th>
 <th scope="col">Dénivelé</th>
 <th scope="col">Temps estimé</th>
 <th scope="col">Vmoy</th>
-<th scope="col">Heure (fin km)</th>
+<th scope="col">Heure (fin km)</th>${diffHead}
 </tr></thead>`;
   const body = rows
     .map((r) => {
@@ -815,12 +820,20 @@ function buildBikeKmEtaTableHtml(rows: BikeKmEtaRow[], swimOffsetS = 0): string 
       const timeCol = formatClockFromRaceStart(r.cumTimeEndS + swimOffsetS, sh, sm);
       const elevHtml = buildElevationMeterHtml(r.dPlusM, r.dMinusM, r.isTotal);
       const trCls = r.isTotal ? ' class="sim-velo__km-eta-tr--total"' : "";
+      let diffCell = "";
+      if (garminInterp) {
+        const targetKm = r.isTotal ? bikeEndKm : Math.min(parseInt(r.kmLabel, 10), bikeEndKm);
+        const garminSec = garminInterp(targetKm);
+        const diffS = r.cumTimeEndS - garminSec;
+        const sign = diffS >= 0 ? "pos" : "neg";
+        diffCell = `\n<td class="sim-velo__km-eta-cell--num sim-bike-diff sim-bike-diff--${sign}">${escapeHtml(formatDiffSeconds(diffS))}</td>`;
+      }
       return `<tr${trCls}>
 <td>${escapeHtml(r.kmLabel)}</td>
 <td class="sim-velo__km-eta-cell--elev">${elevHtml}</td>
 <td class="sim-velo__km-eta-cell--num">${escapeHtml(formatEtaSplitTime(r.timeS))}</td>
 <td class="sim-velo__km-eta-cell--num">${escapeHtml(vStr)}</td>
-<td class="sim-velo__km-eta-cell--num">${escapeHtml(timeCol)}</td>
+<td class="sim-velo__km-eta-cell--num">${escapeHtml(timeCol)}</td>${diffCell}
 </tr>`;
     })
     .join("");
@@ -901,7 +914,8 @@ function renderSimRunKmEtaTable(root: HTMLElement): void {
       simBikeEtaCache.pointsVelo,
       simBikeEtaCache.distVelo,
       getFtp(),
-      getTotalMassKg()
+      getTotalMassKg(),
+      getBikeFatiguePctPerHour()
     );
     bikeTotalS = bikeRows.length > 0 ? bikeRows[bikeRows.length - 1].cumTimeEndS : simRunEtaCache.bikeOffsetS;
   }
@@ -958,8 +972,11 @@ function renderSimBikeKmEtaTable(root: HTMLElement): void {
   if (t1SummaryEl) t1SummaryEl.innerHTML = buildT1SummaryHtml();
   const P = getFtp();
   const M = getTotalMassKg();
-  const rows = computeBikeKmEtaRows(simBikeEtaCache.pointsVelo, simBikeEtaCache.distVelo, P, M);
-  tableEl.innerHTML = buildBikeKmEtaTableHtml(rows, getSwimDurationS() + getT1DurationS());
+  const fatigue = getBikeFatiguePctPerHour();
+  const rows = computeBikeKmEtaRows(simBikeEtaCache.pointsVelo, simBikeEtaCache.distVelo, P, M, fatigue);
+  const garminData = loadGarminSplitsFromStorage();
+  const garminInterp = garminData ? buildGarminInterpolation(garminData) : null;
+  tableEl.innerHTML = buildBikeKmEtaTableHtml(rows, getSwimDurationS() + getT1DurationS(), garminInterp);
   renderSimRunKmEtaTable(root);
 }
 
@@ -970,11 +987,25 @@ export function ensureSimBikeKmEtaAthleteListener(): void {
   document.addEventListener(ATHLETE_SETTINGS_CHANGED, ((ev: Event) => {
     const e = ev as CustomEvent<{ key: string }>;
     const k = e.detail?.key;
-    if (k !== "ftp" && k !== "mass" && k !== "raceStart" && k !== "vma" && k !== "swim" && k !== "t1" && k !== "t2") return;
+    if (k !== "ftp" && k !== "mass" && k !== "raceStart" && k !== "vma" && k !== "swim" && k !== "t1" && k !== "t2" && k !== "bikeFatigue") return;
     const panel = document.querySelector<HTMLElement>(".panel--simulation");
     if (!panel) return;
     renderSimBikeKmEtaTable(panel);
     renderSimRunKmEtaTable(panel);
+    // Re-render les splits Garmin si raceStart / swim / t1 changent (colonne Heure de fin).
+    if (isStrictLocalhost() && (k === "raceStart" || k === "swim" || k === "t1")) {
+      try {
+        const stored = localStorage.getItem(GARMIN_SPLITS_STORAGE_KEY);
+        if (stored) {
+          const parsed = JSON.parse(stored) as GarminSplitsData;
+          const splitsBlock = panel.querySelector<HTMLElement>("#sim-garmin-splits-block");
+          const splitsTableEl = panel.querySelector<HTMLElement>("#sim-garmin-splits-table");
+          applyGarminSplits(splitsBlock, splitsTableEl, parsed);
+        }
+      } catch {
+        /* ignore */
+      }
+    }
   }) as EventListener);
 }
 
@@ -999,14 +1030,6 @@ export function parseGpxTrack(xmlText: string): GpxTrackPoint[] {
   return out;
 }
 
-/** Distances cumulées le long du tracé (mètres), même longueur que `points`. */
-export function cumulativeDistancesM(points: GpxTrackPoint[]): number[] {
-  const cumul: number[] = [0];
-  for (let i = 1; i < points.length; i++) {
-    cumul.push(cumul[i - 1] + haversineM(points[i - 1], points[i]));
-  }
-  return cumul;
-}
 
 function downsample<T>(arr: T[], max: number): T[] {
   if (arr.length <= max) return arr;
@@ -1017,95 +1040,12 @@ function downsample<T>(arr: T[], max: number): T[] {
   return out;
 }
 
-function downsampleProfile(distancesM: number[], elevationsM: number[], max: number): { d: number[]; e: number[] } {
-  if (distancesM.length <= max) return { d: distancesM, e: elevationsM };
-  const idxs: number[] = [];
-  const step = (distancesM.length - 1) / (max - 1);
-  for (let i = 0; i < max; i++) idxs.push(Math.min(distancesM.length - 1, Math.round(i * step)));
-  return {
-    d: idxs.map((i) => distancesM[i]),
-    e: idxs.map((i) => elevationsM[i]),
-  };
-}
 
 /** Profil concaténé vélo → course : distances continues, indice du dernier point « vélo » pour deux couleurs. */
-function mergeBikeRunProfile(
-  distVelo: number[],
-  eleVelo: number[],
-  distRun: number[],
-  eleRun: number[],
-  maxTotal: number
-): { d: number[]; e: number[]; splitIndex: number } {
-  const nV = distVelo.length;
-  const nR = distRun.length;
-  const pV = downsampleProfile(distVelo, eleVelo, Math.max(2, Math.round((maxTotal * nV) / Math.max(nV + nR, 1))));
-  const pR = downsampleProfile(distRun, eleRun, Math.max(2, maxTotal - pV.d.length + 1));
-  const offset = distVelo[nV - 1];
-  const dRunOff = pR.d.map((d) => d + offset);
-  const dComb = [...pV.d, ...dRunOff.slice(1)];
-  const eComb = [...pV.e, ...pR.e.slice(1)];
-  const splitIndex = Math.max(0, pV.d.length - 1);
-  return { d: dComb, e: eComb, splitIndex };
-}
 
 /** Position interpolée sur le parcours à la distance curviligne `distanceM` (m). */
-function positionAtDistanceM(distanceM: number, points: GpxTrackPoint[], distM: number[]): { lat: number; lng: number } {
-  if (points.length === 0) return { lat: 0, lng: 0 };
-  if (points.length === 1 || distM.length < 2) return { lat: points[0].lat, lng: points[0].lng };
-
-  const maxD = distM[distM.length - 1];
-  if (distanceM <= 0) return { lat: points[0].lat, lng: points[0].lng };
-  if (distanceM >= maxD) return { lat: points[points.length - 1].lat, lng: points[points.length - 1].lng };
-
-  let i = 0;
-  while (i < distM.length - 1 && distM[i + 1] < distanceM) i++;
-
-  const d0 = distM[i];
-  const d1 = distM[i + 1];
-  const span = d1 - d0 || 1;
-  const t = (distanceM - d0) / span;
-  return {
-    lat: points[i].lat + t * (points[i + 1].lat - points[i].lat),
-    lng: points[i].lng + t * (points[i + 1].lng - points[i].lng),
-  };
-}
 
 /** Pas d’axe « lisible » (1, 2, 5 × 10ⁿ) pour environ `targetSteps` intervalles (mètres ou tout domaine linéaire). */
-function niceAxisStepM(rangeM: number, targetSteps: number): number {
-  if (rangeM <= 0 || targetSteps < 1) return 1;
-  const rough = rangeM / targetSteps;
-  const exp = Math.floor(Math.log10(rough));
-  const base = 10 ** exp;
-  const m = rough / base;
-  const mult = m <= 1 ? 1 : m <= 2 ? 2 : m <= 5 ? 5 : 10;
-  return mult * base;
-}
-
-function formatDistanceKmLabel(dM: number, stepM: number): string {
-  const km = dM / 1000;
-  // Axe X : privilégier la lisibilité (pas de décimales), même en zoom fort.
-  void stepM;
-  return km.toLocaleString("fr-FR", { maximumFractionDigits: 0 });
-}
-
-function formatLegDistanceKmLabel(
-  absDistanceM: number,
-  stepM: number,
-  bikeEndAbsM: number,
-  swimEndAbsM: number
-): string {
-  const d = Math.max(0, absDistanceM);
-  void stepM;
-  let km: number;
-  if (bikeEndAbsM > 1e-6 && d >= bikeEndAbsM - 1e-6) {
-    km = (d - bikeEndAbsM) / 1000; // CAP : relatif au depart course
-  } else if (swimEndAbsM > 1e-6 && d >= swimEndAbsM - 1e-6) {
-    km = (d - swimEndAbsM) / 1000; // Velo : relatif au depart velo
-  } else {
-    km = d / 1000; // Natation : depuis le depart
-  }
-  return km.toLocaleString("fr-FR", { maximumFractionDigits: 0 });
-}
 
 function buildAltitudeProfileSvg(
   distancesM: number[],
@@ -1419,43 +1359,6 @@ function computeCumulativeDplusM(elevationsM: number[]): number[] {
   return out;
 }
 
-function cumDplusAtDistanceM(distanceM: number, distancesM: number[], cumDplusM: number[]): number {
-  const n = Math.min(distancesM.length, cumDplusM.length);
-  if (n === 0) return 0;
-  const d = Math.max(0, Math.min(distancesM[n - 1] ?? 0, distanceM));
-  // Trouver le dernier index i tel que distancesM[i] <= d (distances croissantes)
-  let lo = 0;
-  let hi = n - 1;
-  while (lo < hi) {
-    const mid = Math.floor((lo + hi + 1) / 2);
-    if (distancesM[mid] <= d) lo = mid;
-    else hi = mid - 1;
-  }
-  return cumDplusM[lo] ?? 0;
-}
-
-/** Texte overlay : vélo = km cumulés parcours ; course = compteur remis à 0 au début du tracé course. */
-function formatAltitudeHoverKm(
-  distanceM: number,
-  swimEndM: number,
-  bikeEndM: number
-): { line1: string; line2: string; leg: "swim" | "bike" | "run" } {
-  const d = Math.max(0, distanceM);
-  const fmt = (km: number) =>
-    `${km.toLocaleString("fr-FR", { minimumFractionDigits: 3, maximumFractionDigits: 3 })} km`;
-
-  if (swimEndM > 1e-6 && d < swimEndM - 1e-6) {
-    return { line1: fmt(d / 1000), line2: "Natation", leg: "swim" };
-  }
-
-  if (bikeEndM > 1e-6 && d >= bikeEndM - 1e-6) {
-    const runKm = (d - bikeEndM) / 1000;
-    return { line1: fmt(runKm), line2: "Course à pied", leg: "run" };
-  }
-
-  const bikeKm = swimEndM > 1e-6 ? (d - swimEndM) / 1000 : d / 1000;
-  return { line1: fmt(bikeKm), line2: bikeEndM > 1e-6 ? "Vélo" : "", leg: "bike" };
-}
 
 function bindAltitudeChartInteraction(
   svg: SVGSVGElement,
@@ -1899,7 +1802,7 @@ export function getSimulationPanelHtml(): string {
                 <strong>Vitesse du segment</strong> : on cherche la vitesse <span class="sim-velo__km-eta-formula"><math xmlns="http://www.w3.org/1998/Math/MathML"><mi>V</mi></math></span>
                 qui “consomme” exactement la puissance fournie, via :
                 <span class="sim-velo__km-eta-formula"><math xmlns="http://www.w3.org/1998/Math/MathML"><mrow><mi>P</mi><mo>·</mo><mi>η</mi><mo>=</mo><mi>M</mi><mi>g</mi><mo>⁢</mo><mrow><mo>(</mo><mi>sin</mi><mo>⁡</mo><mi>α</mi><mo>+</mo><msub><mi>C</mi><mi>rr</mi></msub><mo>·</mo><mi>cos</mi><mo>⁡</mo><mi>α</mi><mo>)</mo></mrow><mo>·</mo><mi>V</mi><mo>+</mo><mfrac><mn>1</mn><mn>2</mn></mfrac><mi>ρ</mi><mo>·</mo><mi>CdA</mi><mo>·</mo><msup><mi>V</mi><mn>3</mn></msup></mrow></math></span>.
-                <span class="sim-velo__km-eta-symbols">Constantes : η=0,97 ; g=9,81 ; Crr=0,005 ; ρ=1,15 ; CdA=0,32.</span>
+                <span class="sim-velo__km-eta-symbols">Constantes : η=0,97 ; g=9,81 ; Crr=0,006 ; ρ=1,15 ; CdA=0,42. Puissance effective = FTP × (1 − <em>fatigue</em> × h), plancher à 50 %.</span>
               </li>
               <li>
                 <strong>Sécurité en descente</strong> : si le segment est en descente (<span class="sim-velo__km-eta-formula"><math xmlns="http://www.w3.org/1998/Math/MathML"><mi>Δalt</mi><mo>&lt;</mo><mn>0</mn></math></span>),
@@ -1917,7 +1820,13 @@ export function getSimulationPanelHtml(): string {
               </li>
             </ul>
           </p>
-          <div class="sim-velo__km-eta-table-wrap" id="sim-velo-km-eta-table" aria-live="polite"></div>
+          <div class="sim-velo__km-eta-tables-row">
+            <div class="sim-velo__km-eta-table-wrap" id="sim-velo-km-eta-table" aria-live="polite"></div>
+            ${isStrictLocalhost() ? `<div class="sim-garmin-splits" id="sim-garmin-splits-block" hidden>
+              <h4 class="sim-velo__chart-title sim-garmin-splits__title">Splits Garmin Power Guidance</h4>
+              <div class="sim-velo__km-eta-table-wrap" id="sim-garmin-splits-table" aria-live="polite"></div>
+            </div>` : ""}
+          </div>
         </div>
         <div class="sim-velo__km-eta sim-transition-km-eta" id="sim-t2-km-eta-block" aria-label="Transition T2">
           <h4 class="sim-velo__chart-title">T2</h4>
@@ -1979,6 +1888,227 @@ export function getSimulationPanelHtml(): string {
     </section>`;
 }
 
+interface GarminSplitsData {
+  headers: string[];
+  rows: string[][];
+}
+
+const GARMIN_SPLITS_HIDDEN_COLS_KEY = "xtriascend.garmin.splits.hiddenCols";
+
+/** Parse "H:MM:SS" ou "MM:SS" en secondes, ou null si non reconnu. */
+function parseTimeToSeconds(s: string): number | null {
+  const parts = s.trim().split(":").map((p) => parseInt(p, 10));
+  if (parts.some(isNaN)) return null;
+  if (parts.length === 3) return parts[0] * 3600 + parts[1] * 60 + parts[2];
+  if (parts.length === 2) return parts[0] * 60 + parts[1];
+  return null;
+}
+
+/** Formate des secondes en "H:MM:SS" ou "MM:SS". */
+function formatSecondsToTime(total: number): string {
+  const h = Math.floor(total / 3600);
+  const m = Math.floor((total % 3600) / 60);
+  const s = Math.round(total % 60);
+  const pad = (n: number) => String(n).padStart(2, "0");
+  if (h > 0) return `${h}:${pad(m)}:${pad(s)}`;
+  return `${m}:${pad(s)}`;
+}
+
+/** Parse un nombre décimal (virgule ou point), renvoie NaN si non parsable. */
+function parseDecimal(v: string): number {
+  return parseFloat(v.replace(",", ".").replace(/[^\d.-]/g, ""));
+}
+
+/**
+ * Pour chaque colonne, calcule la valeur TOTAL :
+ * - colonne 0 : étiquette fixe "Total"
+ * - colonnes durées (H:MM:SS / MM:SS) : somme
+ * - colonnes numériques : somme
+ * - sinon : "—"
+ */
+function computeSplitsTotals(rows: string[][], colCount: number): string[] {
+  if (rows.length === 0) return [];
+  const totals: string[] = [];
+  for (let c = 0; c < colCount; c++) {
+    if (c === 0) { totals.push("Total"); continue; }
+    const cells = rows.map((r) => (r[c] ?? "").trim()).filter((v) => v !== "" && v !== "—");
+    if (cells.length === 0) { totals.push("—"); continue; }
+    const timeSecs = cells.map(parseTimeToSeconds);
+    if (timeSecs.every((v) => v !== null)) {
+      totals.push(formatSecondsToTime((timeSecs as number[]).reduce((a, b) => a + b, 0)));
+      continue;
+    }
+    const nums = cells.map(parseDecimal);
+    if (nums.every((n) => !isNaN(n))) {
+      const sum = nums.reduce((a, b) => a + b, 0);
+      const sample = cells[0].replace(",", ".").replace(/[^\d.-]/g, "");
+      const dot = sample.indexOf(".");
+      const decimals = dot >= 0 ? sample.length - dot - 1 : 0;
+      totals.push(sum.toFixed(decimals).replace(".", ","));
+      continue;
+    }
+    totals.push("—");
+  }
+  return totals;
+}
+
+/** Première colonne (hors 0) dont toutes les cellules sont parsables en durée. */
+function detectTimeColumnIndex(rows: string[][], colCount: number): number {
+  for (let c = 1; c < colCount; c++) {
+    const cells = rows.map((r) => (r[c] ?? "").trim()).filter((v) => v !== "" && v !== "—");
+    if (cells.length > 0 && cells.every((v) => parseTimeToSeconds(v) !== null)) return c;
+  }
+  return -1;
+}
+
+/**
+ * Première colonne dont le header contient "km" ou "dist" (insensible à la casse),
+ * ou à défaut première colonne purement numérique différente de la colonne temps.
+ */
+function detectDistanceColumnIndex(headers: string[], rows: string[][], colCount: number, timeColIdx: number): number {
+  // 1. Cherche par header
+  for (let c = 1; c < colCount; c++) {
+    const h = (headers[c] ?? "").toLowerCase();
+    if (h.includes("km") || h.includes("dist")) return c;
+  }
+  // 2. Fallback : première colonne numérique hors temps
+  for (let c = 1; c < colCount; c++) {
+    if (c === timeColIdx) continue;
+    const cells = rows.map((r) => (r[c] ?? "").trim()).filter((v) => v !== "" && v !== "—");
+    if (cells.length > 0 && cells.map(parseDecimal).every((n) => !isNaN(n))) return c;
+  }
+  return -1;
+}
+
+interface GarminSplitsRender {
+  tableHtml: string;
+  colNames: string[];
+}
+
+function buildGarminSplitsTable(data: GarminSplitsData): GarminSplitsRender {
+  if (!data.headers.length && !data.rows.length) {
+    return {
+      tableHtml: `<p class="sim-velo__km-eta-empty">Aucune donnée splits.</p>`,
+      colNames: [],
+    };
+  }
+  const colCount = Math.max(data.headers.length, ...data.rows.map((r) => r.length));
+  const { h: sh, m: sm } = getRaceStartHourMinute();
+  const preOffsetS = getSwimDurationS() + getT1DurationS();
+  const timeColIdx = detectTimeColumnIndex(data.rows, colCount);
+  const distColIdx = detectDistanceColumnIndex(data.headers, data.rows, colCount, timeColIdx);
+
+  // Km cumulés par ligne
+  let cumulKm = 0;
+  const kmCumulPerRow: string[] = data.rows.map((row) => {
+    if (distColIdx < 0) return "—";
+    const km = parseDecimal((row[distColIdx] ?? "").trim());
+    if (isNaN(km)) return "—";
+    cumulKm += km;
+    return cumulKm.toFixed(1).replace(".", ",");
+  });
+  const totalKm = cumulKm;
+
+  // Heure de fin par ligne
+  let cumulS = preOffsetS;
+  const clockPerRow: string[] = data.rows.map((row) => {
+    if (timeColIdx < 0) return "—";
+    const secs = parseTimeToSeconds((row[timeColIdx] ?? "").trim());
+    if (secs === null) return "—";
+    cumulS += secs;
+    return formatClockFromRaceStart(cumulS, sh, sm);
+  });
+  const finalClockS = cumulS;
+
+  const allHeaders = [...data.headers, "Km cumulés", "Heure de fin"];
+  const headCells = allHeaders
+    .map((h, i) => `<th class="sim-garmin-splits__th" data-col="${i}">${escapeHtml(h)}</th>`)
+    .join("");
+
+  const bodyRows = data.rows
+    .map(
+      (row, i) =>
+        `<tr>${[...row, kmCumulPerRow[i], clockPerRow[i]]
+          .map((cell, ci) => `<td class="sim-garmin-splits__td" data-col="${ci}">${escapeHtml(cell)}</td>`)
+          .join("")}</tr>`
+    )
+    .join("");
+
+  const totals = computeSplitsTotals(data.rows, colCount);
+  const totalKmCell = distColIdx >= 0 ? totalKm.toFixed(1).replace(".", ",") : "—";
+  const totalClockCell = timeColIdx >= 0 ? formatClockFromRaceStart(finalClockS, sh, sm) : "—";
+  const totalRow = totals.length
+    ? `<tr class="sim-garmin-splits__tr--total">${[...totals, totalKmCell, totalClockCell]
+        .map((v, ci) => `<td class="sim-garmin-splits__td" data-col="${ci}">${escapeHtml(v)}</td>`)
+        .join("")}</tr>`
+    : "";
+
+  return {
+    tableHtml: `<table class="sim-garmin-splits__table">
+${headCells ? `<thead><tr>${headCells}</tr></thead>` : ""}
+<tbody>${bodyRows}${totalRow}</tbody>
+</table>`,
+    colNames: allHeaders,
+  };
+}
+
+function applyGarminSplits(splitsBlock: HTMLElement | null, splitsTableEl: HTMLElement | null, data: GarminSplitsData): void {
+  if (!splitsBlock || !splitsTableEl) return;
+
+  const { tableHtml, colNames } = buildGarminSplitsTable(data);
+
+  // Colonnes masquées persistées
+  let hiddenCols: number[] = [];
+  try {
+    const raw = localStorage.getItem(GARMIN_SPLITS_HIDDEN_COLS_KEY);
+    if (raw) hiddenCols = JSON.parse(raw) as number[];
+  } catch { /* ignore */ }
+
+  // Barre de toggles
+  const togglesHtml = colNames.length
+    ? `<div class="sim-garmin-splits__toggles" aria-label="Afficher / masquer les colonnes">${colNames
+        .map(
+          (name, i) =>
+            `<button type="button" class="sim-garmin-splits__toggle${hiddenCols.includes(i) ? " sim-garmin-splits__toggle--off" : ""}" data-col="${i}" title="${escapeHtml(name)}">${escapeHtml(name)}</button>`
+        )
+        .join("")}</div>`
+    : "";
+
+  // Classes de masquage initiales
+  const hideClasses = hiddenCols.map((c) => `sim-garmin-splits__table--hide-col-${c}`).join(" ");
+  const htmlWithHide = tableHtml.replace(
+    'class="sim-garmin-splits__table"',
+    `class="sim-garmin-splits__table${hideClasses ? " " + hideClasses : ""}"`
+  );
+
+  splitsTableEl.innerHTML = togglesHtml + htmlWithHide;
+  splitsBlock.hidden = false;
+
+  // Événements des toggles
+  const tableEl = splitsTableEl.querySelector<HTMLElement>(".sim-garmin-splits__table");
+  splitsTableEl.querySelectorAll<HTMLButtonElement>(".sim-garmin-splits__toggle").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const col = parseInt(btn.dataset.col ?? "0", 10);
+      let stored: number[] = [];
+      try {
+        const raw = localStorage.getItem(GARMIN_SPLITS_HIDDEN_COLS_KEY);
+        if (raw) stored = JSON.parse(raw) as number[];
+      } catch { /* ignore */ }
+      const idx = stored.indexOf(col);
+      if (idx >= 0) {
+        stored.splice(idx, 1);
+        btn.classList.remove("sim-garmin-splits__toggle--off");
+        tableEl?.classList.remove(`sim-garmin-splits__table--hide-col-${col}`);
+      } else {
+        stored.push(col);
+        btn.classList.add("sim-garmin-splits__toggle--off");
+        tableEl?.classList.add(`sim-garmin-splits__table--hide-col-${col}`);
+      }
+      try { localStorage.setItem(GARMIN_SPLITS_HIDDEN_COLS_KEY, JSON.stringify(stored)); } catch { /* ignore */ }
+    });
+  });
+}
+
 export async function mountSimulationPanel(container: HTMLElement): Promise<void> {
   const root = container.querySelector<HTMLElement>(".panel--simulation");
   if (!root) return;
@@ -1990,7 +2120,28 @@ export async function mountSimulationPanel(container: HTMLElement): Promise<void
   const statsEl = root.querySelector<HTMLElement>("#sim-velo-stats");
   const bikeTableEl = root.querySelector<HTMLElement>("#sim-velo-km-eta-table");
   const runTableEl = root.querySelector<HTMLElement>("#sim-run-km-eta-table");
+  const splitsBlock = root.querySelector<HTMLElement>("#sim-garmin-splits-block");
+  const splitsTableEl = root.querySelector<HTMLElement>("#sim-garmin-splits-table");
   if (!mapEl || !mapMsg || !chartEl || !resetZoomBtn || !statsEl || !bikeTableEl || !runTableEl) return;
+
+  // Splits Garmin : uniquement en localhost.
+  if (isStrictLocalhost()) {
+    try {
+      const stored = localStorage.getItem(GARMIN_SPLITS_STORAGE_KEY);
+      if (stored) {
+        const parsed = JSON.parse(stored) as GarminSplitsData;
+        applyGarminSplits(splitsBlock, splitsTableEl, parsed);
+      }
+    } catch {
+      /* ignore */
+    }
+
+    document.addEventListener(GARMIN_SPLITS_UPDATED_EVENT, ((ev: Event) => {
+      const e = ev as CustomEvent<GarminSplitsData>;
+      applyGarminSplits(splitsBlock, splitsTableEl, e.detail);
+      renderSimBikeKmEtaTable(root);
+    }) as EventListener);
+  }
 
   mapMsg.hidden = true;
   mapMsg.textContent = "";
@@ -2180,7 +2331,7 @@ export async function mountSimulationPanel(container: HTMLElement): Promise<void
   renderSelectedProfile();
 
   simBikeEtaCache = { pointsVelo, distVelo };
-  const bikeRows = computeBikeKmEtaRows(pointsVelo, distVelo, getFtp(), getTotalMassKg());
+  const bikeRows = computeBikeKmEtaRows(pointsVelo, distVelo, getFtp(), getTotalMassKg(), getBikeFatiguePctPerHour());
   const bikeTotalS = bikeRows.length > 0 ? bikeRows[bikeRows.length - 1].cumTimeEndS : 0;
   simRunEtaCache = { pointsRun, distRun, bikeOffsetS: bikeTotalS };
   ensureSimBikeKmEtaAthleteListener();

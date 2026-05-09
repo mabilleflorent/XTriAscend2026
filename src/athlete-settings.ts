@@ -1,5 +1,8 @@
 /** FTP vélo, VMA course et masse totale : stockage local partagé (Simulation + Suivi). */
 
+import { clampInt, parseMMSS, formatMMSS, normalizeHHMM } from "./calc-utils";
+export { parseMMSS, formatMMSS } from "./calc-utils";
+
 const FTP_STORAGE_KEY = "xtriascend_ftp";
 const FTP_DEFAULT = 250;
 
@@ -63,15 +66,6 @@ export function setTotalMassKg(kg: number): void {
 const RACE_START_STORAGE_KEY = "xtriascend_race_start_hhmm";
 const RACE_START_DEFAULT_HHMM = "03:00";
 
-function normalizeHHMM(raw: string): string | null {
-  const m = raw.trim().match(/^(\d{1,2}):(\d{2})$/);
-  if (!m) return null;
-  const h = parseInt(m[1], 10);
-  const min = parseInt(m[2], 10);
-  if (!Number.isFinite(h) || !Number.isFinite(min) || h < 0 || h > 23 || min < 0 || min > 59) return null;
-  return `${String(h).padStart(2, "0")}:${String(min).padStart(2, "0")}`;
-}
-
 /** Heure de départ de la course (affichage / simulation), format 24 h « HH:MM ». Défaut 03:00. */
 export function getRaceStartTimeHHMM(): string {
   const stored = localStorage.getItem(RACE_START_STORAGE_KEY);
@@ -90,29 +84,6 @@ export function setRaceStartTimeHHMM(hhmm: string): void {
 const SWIM_PACE_STORAGE_KEY = "xtriascend_swim_pace_mmss_per_100m";
 const SWIM_PACE_LEGACY_STORAGE_KEY = "xtriascend_swim_pace_min_per_100m";
 const SWIM_PACE_DEFAULT_SEC_PER_100M = 120; // 2:00 / 100 m
-
-function clampInt(n: number, lo: number, hi: number): number {
-  if (!Number.isFinite(n)) return lo;
-  return Math.min(hi, Math.max(lo, Math.floor(n)));
-}
-
-/** Parse "MM:SS" (ou "M:SS") vers secondes. */
-function parseMMSS(raw: string): number | null {
-  const s = raw.trim();
-  const m = s.match(/^(\d{1,2}):(\d{2})$/);
-  if (!m) return null;
-  const mm = parseInt(m[1], 10);
-  const ss = parseInt(m[2], 10);
-  if (!Number.isFinite(mm) || !Number.isFinite(ss) || mm < 0 || ss < 0 || ss > 59) return null;
-  return mm * 60 + ss;
-}
-
-function formatMMSS(totalSec: number): string {
-  const s = clampInt(totalSec, 0, 99 * 60 + 59);
-  const mm = Math.floor(s / 60);
-  const ss = s % 60;
-  return `${String(mm).padStart(2, "0")}:${String(ss).padStart(2, "0")}`;
-}
 
 /** Allure de nage en secondes par 100 m. Défaut : 2:00 /100m. */
 export function getSwimPaceSecPer100m(): number {
@@ -243,4 +214,27 @@ export function getRaceStartHourMinute(): { h: number; m: number } {
   if (!n) return { h: 3, m: 0 };
   const [a, b] = n.split(":");
   return { h: parseInt(a, 10), m: parseInt(b, 10) };
+}
+
+const BIKE_FATIGUE_STORAGE_KEY = "xtriascend_bike_fatigue_pct_per_h";
+/** Défaut : 0 % / h (aucune fatigue). */
+const BIKE_FATIGUE_DEFAULT = 0;
+
+/**
+ * Dégradation progressive de la puissance effective sur le vélo.
+ * Unité : % de FTP perdu par heure de vélo (ex. 3 → −3 % / h).
+ * Plage autorisée : 0–15 %.
+ */
+export function getBikeFatiguePctPerHour(): number {
+  const stored = localStorage.getItem(BIKE_FATIGUE_STORAGE_KEY);
+  if (stored !== null) {
+    const v = parseFloat(stored);
+    if (Number.isFinite(v) && v >= 0 && v <= 15) return v;
+  }
+  return BIKE_FATIGUE_DEFAULT;
+}
+
+export function setBikeFatiguePctPerHour(val: number): void {
+  const v = Math.max(0, Math.min(15, Math.round(val * 10) / 10));
+  localStorage.setItem(BIKE_FATIGUE_STORAGE_KEY, String(v));
 }

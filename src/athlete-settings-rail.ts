@@ -1,4 +1,5 @@
 import {
+  getBikeFatiguePctPerHour,
   getFtp,
   getRaceStartTimeHHMM,
   getSwimPaceMMSSPer100m,
@@ -6,6 +7,7 @@ import {
   getT2MMSS,
   getTotalMassKg,
   getVmaCapKmh,
+  setBikeFatiguePctPerHour,
   setFtp,
   setRaceStartTimeHHMM,
   setSwimPaceSecPer100m,
@@ -17,7 +19,7 @@ import {
 
 export const ATHLETE_SETTINGS_CHANGED = "xtriascend-athlete-settings";
 
-export type AthleteSettingsChangedKey = "ftp" | "vma" | "mass" | "raceStart" | "swim" | "t1" | "t2";
+export type AthleteSettingsChangedKey = "ftp" | "vma" | "mass" | "raceStart" | "swim" | "t1" | "t2" | "bikeFatigue";
 
 type AthleteSettingsDetail = { key: AthleteSettingsChangedKey };
 
@@ -32,6 +34,7 @@ export function mountAthleteSettingsRail(): void {
   const swimPaceInput = root.querySelector<HTMLInputElement>("#swim-pace-rail-input");
   const t1Input = root.querySelector<HTMLInputElement>("#t1-rail-input");
   const t2Input = root.querySelector<HTMLInputElement>("#t2-rail-input");
+  const bikeFatigueInput = root.querySelector<HTMLInputElement>("#bike-fatigue-rail-input");
 
   if (ftpInput) {
     ftpInput.value = String(getFtp());
@@ -146,6 +149,20 @@ export function mountAthleteSettingsRail(): void {
     t2Input.addEventListener("input", commitT2);
     t2Input.addEventListener("change", commitT2);
   }
+
+  if (bikeFatigueInput) {
+    bikeFatigueInput.value = String(getBikeFatiguePctPerHour());
+    const commitBikeFatigue = () => {
+      const val = parseFloat(bikeFatigueInput.value.replace(",", "."));
+      if (!Number.isFinite(val) || val < 0 || val > 15) return;
+      setBikeFatiguePctPerHour(val);
+      document.dispatchEvent(
+        new CustomEvent<AthleteSettingsDetail>(ATHLETE_SETTINGS_CHANGED, { detail: { key: "bikeFatigue" } })
+      );
+    };
+    bikeFatigueInput.addEventListener("input", commitBikeFatigue);
+    bikeFatigueInput.addEventListener("change", commitBikeFatigue);
+  }
 }
 
 export function syncAthleteSettingsRailInputs(): void {
@@ -157,6 +174,7 @@ export function syncAthleteSettingsRailInputs(): void {
   const swimPaceInput = root?.querySelector<HTMLInputElement>("#swim-pace-rail-input");
   const t1Input = root?.querySelector<HTMLInputElement>("#t1-rail-input");
   const t2Input = root?.querySelector<HTMLInputElement>("#t2-rail-input");
+  const bikeFatigueInput = root?.querySelector<HTMLInputElement>("#bike-fatigue-rail-input");
   if (ftpInput) ftpInput.value = String(getFtp());
   if (vmaInput) vmaInput.value = String(getVmaCapKmh());
   if (massInput) massInput.value = String(getTotalMassKg());
@@ -164,4 +182,5 @@ export function syncAthleteSettingsRailInputs(): void {
   if (swimPaceInput) swimPaceInput.value = getSwimPaceMMSSPer100m();
   if (t1Input) t1Input.value = getT1MMSS();
   if (t2Input) t2Input.value = getT2MMSS();
+  if (bikeFatigueInput) bikeFatigueInput.value = String(getBikeFatiguePctPerHour());
 }

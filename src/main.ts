@@ -42,6 +42,13 @@ document.querySelector<HTMLDivElement>("#app")!.innerHTML = `
             <span class="ftp-rail-estimate" id="ftp-rail-estimate" aria-live="polite" title="">—</span>
           </div>
           </div>
+          <div class="ftp-config ftp-config--stack">
+          <label class="ftp-config__label" for="bike-fatigue-rail-input" title="Dégradation progressive de la puissance effective sur le vélo : chaque heure de vélo réduit la puissance de ce pourcentage. 0 = aucune fatigue.">Fatigue vélo</label>
+          <div class="athlete-settings-rail__input-row">
+            <input class="ftp-config__input ftp-config__input--rail" id="bike-fatigue-rail-input" type="number" min="0" max="15" step="0.5" placeholder="0" aria-label="Coefficient de fatigue vélo en pourcentage par heure"/>
+            <span class="ftp-config__unit">% / h</span>
+          </div>
+          </div>
           <div class="vma-config vma-config--stack">
           <label class="vma-config__label" for="vma-cap-rail-input">VMA CAP</label>
           <div class="athlete-settings-rail__input-row">
@@ -96,12 +103,24 @@ document.querySelector<HTMLDivElement>("#app")!.innerHTML = `
             ? `<div class="garmin-local" id="garmin-local" aria-label="Connecteur Garmin local">
           <h2 class="athlete-settings-rail__title athlete-settings-rail__title--garmin">Garmin</h2>
           <div class="garmin-local__actions">
-            <button type="button" class="garmin-local__btn" id="garmin-local-open-login">
-              Ouvrir connexion Garmin
-            </button>
+            <div class="garmin-local__login-row">
+              <button type="button" class="garmin-local__btn" id="garmin-local-open-login">
+                Ouvrir connexion Garmin
+              </button>
+              <button type="button" class="garmin-local__btn garmin-local__btn--icon" id="garmin-local-clear-session" title="Supprimer la session : fichiers .garmin-*, profil Chrome du connecteur (sinon Garmin reste connecté). Fermer d’abord toute fenêtre ouverte par le connecteur si besoin." aria-label="Supprimer la session Garmin locale et le profil navigateur">
+                <svg class="garmin-local__icon-trash" xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><line x1="10" y1="11" x2="10" y2="17"/><line x1="14" y1="11" x2="14" y2="17"/></svg>
+              </button>
+            </div>
             <button type="button" class="garmin-local__btn" id="garmin-local-export-fit">
               Récupérer les fichiers FIT
             </button>
+            <button type="button" class="garmin-local__btn" id="garmin-local-fetch-splits">
+              Récupération des splits
+            </button>
+          </div>
+          <div class="garmin-local__scroll-anchor">
+            <label class="garmin-local__scroll-anchor-label" for="garmin-local-scroll-until-id" title="Id d’activité Garmin jusqu’auquel Playwright défile la liste (ancrage). Vide = défaut serveur ; 0 = pas de défilement (liste initiale seulement).">Id activité fin de liste (scroll)</label>
+            <input class="garmin-local__scroll-anchor-input" id="garmin-local-scroll-until-id" type="text" inputmode="numeric" pattern="[0-9]*" placeholder="ex. 21441722196" autocomplete="off" aria-label="Identifiant d’activité Garmin pour arrêter le défilement de la liste lors de l’export FIT"/>
           </div>
           <p class="garmin-local__status muted" id="garmin-local-status" role="status" aria-live="polite"></p>
         </div>`
