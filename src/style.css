@@ -965,6 +965,189 @@ body {
   color: #16a34a; /* en avance sur Garmin */
 }
 
+/* ─── Colonne "add event" (bouton +) ─────────────────────────────────────── */
+.sim-event-add-cell {
+  width: 28px;
+  min-width: 28px;
+  padding: 0 !important;
+  text-align: center;
+}
+
+.sim-add-event-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: 50%;
+  background: transparent;
+  color: #6b7280;
+  font-size: 14px;
+  line-height: 1;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.15s, background 0.15s, color 0.15s;
+}
+
+tr:hover .sim-add-event-btn {
+  opacity: 1;
+}
+
+.sim-add-event-btn:hover {
+  background: #3b82f6;
+  color: #fff;
+  border-color: #2563eb;
+  opacity: 1;
+}
+
+/* ─── Lignes événement (validé) ──────────────────────────────────────────── */
+.sim-event-row {
+  border-top: 1px dashed rgba(148, 163, 184, 0.2);
+  border-bottom: 1px dashed rgba(148, 163, 184, 0.2);
+}
+
+.sim-event-row__label {
+  padding: 4px 8px !important;
+}
+
+/* Le wrapper interne utilise flex (pas le <td> lui-même) */
+.sim-event-row__inner {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 0.8rem;
+  color: #94a3b8;
+}
+
+.sim-event-row__icon {
+  font-size: 0.85em;
+  opacity: 0.6;
+  flex-shrink: 0;
+}
+
+.sim-event-row__title {
+  color: #cbd5e1;
+  font-style: italic;
+}
+
+.sim-event-row__dur {
+  margin-left: auto;
+  color: #f59e0b;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.sim-event-del-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: #ef4444;
+  cursor: pointer;
+  font-size: 13px;
+  opacity: 0;
+  transition: opacity 0.15s, background 0.15s;
+}
+
+.sim-event-row:hover .sim-event-del-btn {
+  opacity: 1;
+}
+
+.sim-event-del-btn:hover {
+  background: rgba(239, 68, 68, 0.15);
+}
+
+/* ─── Ligne draft (en cours de saisie) ──────────────────────────────────── */
+.sim-event-row--draft td {
+  border-top: 1px solid rgba(74, 222, 128, 0.25);
+  border-bottom: 1px solid rgba(74, 222, 128, 0.25);
+}
+
+.sim-event-row__draft-cell {
+  padding: 5px 8px !important;
+}
+
+.sim-event-row__draft-inner {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.sim-event-draft-title,
+.sim-event-draft-duration {
+  background: transparent;
+  border: none;
+  border-bottom: 1px solid #475569;
+  border-radius: 0;
+  color: #1e40af;
+  font-size: 0.8rem;
+  padding: 2px 4px;
+  outline: none;
+}
+
+.sim-event-draft-title {
+  flex: 1 1 160px;
+  min-width: 120px;
+}
+
+.sim-event-draft-duration {
+  width: 8em;
+}
+
+.sim-event-draft-title:focus,
+.sim-event-draft-duration:focus {
+  border-bottom-color: #3b82f6;
+}
+
+.sim-event-draft-title--error,
+.sim-event-draft-duration--error {
+  border-color: #ef4444 !important;
+}
+
+.sim-event-check-btn,
+.sim-event-trash-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border-radius: 6px;
+  border: 1px solid transparent;
+  cursor: pointer;
+  font-size: 14px;
+  flex-shrink: 0;
+  transition: background 0.15s;
+}
+
+.sim-event-check-btn {
+  background: rgba(20, 83, 45, 0.7);
+  color: #4ade80;
+  border-color: rgba(22, 101, 52, 0.8);
+}
+
+.sim-event-check-btn:hover {
+  background: #166534;
+}
+
+.sim-event-trash-btn {
+  background: rgba(69, 10, 10, 0.7);
+  color: #f87171;
+  border-color: rgba(127, 29, 29, 0.8);
+}
+
+.sim-event-trash-btn:hover {
+  background: #7f1d1d;
+}
+
 /* Barre de toggles colonnes */
 .sim-garmin-splits__toggles {
   display: flex;

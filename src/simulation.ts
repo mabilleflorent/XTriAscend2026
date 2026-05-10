@@ -273,7 +273,7 @@ type BlackShirtResult = {
   passed: boolean;
 };
 
-function computeBlackShirtResult(runRows: RunKmEtaRow[], raceStartH: number, raceStartM: number): BlackShirtResult | null {
+function computeBlackShirtResult(runRows: RunKmEtaRow[], raceStartH: number, raceStartM: number, runEventsExtraS = 0): BlackShirtResult | null {
   // On cherche le temps absolu (offset depuis l'heure de départ) au 31,188 km du tracé CAP.
   let cumRunDistM = 0;
   let prevCumTimeAbsS = 0;
@@ -283,7 +283,7 @@ function computeBlackShirtResult(runRows: RunKmEtaRow[], raceStartH: number, rac
     if (nextDist + 1e-9 >= RUN_BLACK_SHIRT_CHECKPOINT_M) {
       const remain = RUN_BLACK_SHIRT_CHECKPOINT_M - cumRunDistM;
       const frac = r.horizM > 1e-9 ? Math.max(0, Math.min(1, remain / r.horizM)) : 0;
-      const tAbsAt = prevCumTimeAbsS + r.timeS * frac;
+      const tAbsAt = prevCumTimeAbsS + r.timeS * frac + runEventsExtraS;
       const startSec = raceStartH * 3600 + raceStartM * 60;
       const cutoffAbsSec = (() => {
         const c = RUN_BLACK_SHIRT_CUTOFF_CLOCK_H * 3600 + RUN_BLACK_SHIRT_CUTOFF_CLOCK_M * 60;
@@ -741,6 +741,64 @@ function buildT2SummaryHtml(bikeTotalS: number): string {
 </table>`;
 }
 
+// ─── Événements personnalisés (pauses, arrêts…) dans les tableaux km ─────────
+
+const SIM_CUSTOM_EVENTS_KEY = "xtriascend.sim.customEvents";
+
+interface SimCustomEvent {
+  id: string;
+  tableType: "bike" | "run";
+  afterKmLabel: string;
+  title: string;
+  durationS: number;
+}
+
+function getSimCustomEvents(): SimCustomEvent[] {
+  try {
+    const raw = localStorage.getItem(SIM_CUSTOM_EVENTS_KEY);
+    return raw ? (JSON.parse(raw) as SimCustomEvent[]) : [];
+  } catch { return []; }
+}
+
+function setSimCustomEvents(events: SimCustomEvent[]): void {
+  try { localStorage.setItem(SIM_CUSTOM_EVENTS_KEY, JSON.stringify(events)); } catch { /* ignore */ }
+}
+
+/** Offset supplémentaire en secondes accumulé par les événements vélo jusqu'au km N inclus. */
+function bikeEventsExtraS(events: SimCustomEvent[], upToKmLabel: string): number {
+  const n = parseInt(upToKmLabel, 10);
+  return events
+    .filter((e) => e.tableType === "bike" && parseInt(e.afterKmLabel, 10) <= n)
+    .reduce((s, e) => s + e.durationS, 0);
+}
+
+/** Total des durées des événements vélo (pour décaler la base de la course). */
+function totalBikeEventsS(events: SimCustomEvent[]): number {
+  return events.filter((e) => e.tableType === "bike").reduce((s, e) => s + e.durationS, 0);
+}
+
+/** Offset des événements course jusqu'au km N inclus. */
+function runEventsExtraS(events: SimCustomEvent[], upToKmLabel: string): number {
+  const n = parseInt(upToKmLabel, 10);
+  return events
+    .filter((e) => e.tableType === "run" && parseInt(e.afterKmLabel, 10) <= n)
+    .reduce((s, e) => s + e.durationS, 0);
+}
+
+/** Construit les `<tr>` HTML pour les événements validés après un km donné. */
+function buildEventRowsHtml(events: SimCustomEvent[], afterKmLabel: string, tableType: "bike" | "run", colCount: number): string {
+  return events
+    .filter((e) => e.tableType === tableType && e.afterKmLabel === afterKmLabel)
+    .map((e) => {
+      const dur = formatEtaSplitTime(e.durationS);
+      return `<tr class="sim-event-row" data-event-id="${escapeHtml(e.id)}">
+<td class="sim-event-row__label" colspan="${colCount - 1}"><div class="sim-event-row__inner"><span class="sim-event-row__icon">⏸</span><span class="sim-event-row__title">${escapeHtml(e.title)}</span><span class="sim-event-row__dur">+${escapeHtml(dur)}</span></div></td>
+<td class="sim-event-add-cell"><button type="button" class="sim-event-del-btn" data-event-id="${escapeHtml(e.id)}" title="Supprimer cet événement" aria-label="Supprimer">🗑</button></td>
+</tr>`;
+    })
+    .join("");
+}
+
 /**
  * Construit une fonction d'interpolation linéaire du temps Garmin en fonction du km cumulé.
  * Retourne null si les colonnes distance/temps ne sont pas détectables.
@@ -799,7 +857,8 @@ function formatDiffSeconds(diffS: number): string {
 function buildBikeKmEtaTableHtml(
   rows: BikeKmEtaRow[],
   swimOffsetS = 0,
-  garminInterp: ((km: number) => number) | null = null
+  garminInterp: ((km: number) => number) | null = null,
+  events: SimCustomEvent[] = []
 ): string {
   if (rows.length === 0) {
     return `<p class="sim-velo__km-eta-empty">Pas assez de données vélo pour estimer les temps au km.</p>`;
@@ -807,50 +866,64 @@ function buildBikeKmEtaTableHtml(
   const { h: sh, m: sm } = getRaceStartHourMinute();
   const bikeEndKm = (rows.find((r) => r.isTotal)?.distanceM ?? 0) / 1000;
   const diffHead = garminInterp ? `\n<th scope="col">Δ Garmin</th>` : "";
+  // +1 colonne "add" pour le bouton "+"
   const head = `<thead><tr>
 <th scope="col">Km</th>
 <th scope="col">Dénivelé</th>
 <th scope="col">Temps estimé</th>
 <th scope="col">Vmoy</th>
 <th scope="col">Heure (fin km)</th>${diffHead}
+<th class="sim-event-add-cell" scope="col"></th>
 </tr></thead>`;
-  const body = rows
-    .map((r) => {
-      const vStr = r.avgKmh > 0 ? `${r.avgKmh.toLocaleString("fr-FR", { maximumFractionDigits: 1 })} km/h` : "—";
-      const timeCol = formatClockFromRaceStart(r.cumTimeEndS + swimOffsetS, sh, sm);
-      const elevHtml = buildElevationMeterHtml(r.dPlusM, r.dMinusM, r.isTotal);
-      const trCls = r.isTotal ? ' class="sim-velo__km-eta-tr--total"' : "";
-      let diffCell = "";
-      if (garminInterp) {
-        const targetKm = r.isTotal ? bikeEndKm : Math.min(parseInt(r.kmLabel, 10), bikeEndKm);
-        const garminSec = garminInterp(targetKm);
-        const diffS = r.cumTimeEndS - garminSec;
-        const sign = diffS >= 0 ? "pos" : "neg";
-        diffCell = `\n<td class="sim-velo__km-eta-cell--num sim-bike-diff sim-bike-diff--${sign}">${escapeHtml(formatDiffSeconds(diffS))}</td>`;
-      }
-      return `<tr${trCls}>
+  const colCount = 6 + (garminInterp ? 1 : 0);
+  const bodyParts: string[] = [];
+  rows.forEach((r) => {
+    const extraS = r.isTotal ? totalBikeEventsS(events) : bikeEventsExtraS(events, r.kmLabel);
+    const displayTimeS = r.isTotal ? r.timeS + extraS : r.timeS;
+    const vStr = r.avgKmh > 0 ? `${r.avgKmh.toLocaleString("fr-FR", { maximumFractionDigits: 1 })} km/h` : "—";
+    const timeCol = formatClockFromRaceStart(r.cumTimeEndS + swimOffsetS + extraS, sh, sm);
+    const elevHtml = buildElevationMeterHtml(r.dPlusM, r.dMinusM, r.isTotal);
+    const trCls = r.isTotal ? ' class="sim-velo__km-eta-tr--total"' : "";
+    const kmAttr = r.isTotal ? "" : ` data-km="${escapeHtml(r.kmLabel)}"`;
+    let diffCell = "";
+    if (garminInterp) {
+      const targetKm = r.isTotal ? bikeEndKm : Math.min(parseInt(r.kmLabel, 10), bikeEndKm);
+      const garminSec = garminInterp(targetKm);
+      const diffS = r.cumTimeEndS - garminSec;
+      const sign = diffS >= 0 ? "pos" : "neg";
+      diffCell = `\n<td class="sim-velo__km-eta-cell--num sim-bike-diff sim-bike-diff--${sign}">${escapeHtml(formatDiffSeconds(diffS))}</td>`;
+    }
+    const addCell = r.isTotal
+      ? `<td class="sim-event-add-cell"></td>`
+      : `<td class="sim-event-add-cell"><button type="button" class="sim-add-event-btn" data-km="${escapeHtml(r.kmLabel)}" data-table="bike" title="Ajouter un événement après le km ${escapeHtml(r.kmLabel)}">+</button></td>`;
+    bodyParts.push(`<tr${trCls}${kmAttr}>
 <td>${escapeHtml(r.kmLabel)}</td>
 <td class="sim-velo__km-eta-cell--elev">${elevHtml}</td>
-<td class="sim-velo__km-eta-cell--num">${escapeHtml(formatEtaSplitTime(r.timeS))}</td>
+<td class="sim-velo__km-eta-cell--num">${escapeHtml(formatEtaSplitTime(displayTimeS))}</td>
 <td class="sim-velo__km-eta-cell--num">${escapeHtml(vStr)}</td>
 <td class="sim-velo__km-eta-cell--num">${escapeHtml(timeCol)}</td>${diffCell}
-</tr>`;
-    })
-    .join("");
-  return `<table class="sim-velo__km-eta-table sim-velo__km-eta-table--bike">${head}<tbody>${body}</tbody></table>`;
+${addCell}
+</tr>`);
+    if (!r.isTotal) {
+      bodyParts.push(buildEventRowsHtml(events, r.kmLabel, "bike", colCount));
+    }
+  });
+  return `<table class="sim-velo__km-eta-table sim-velo__km-eta-table--bike">${head}<tbody>${bodyParts.join("")}</tbody></table>`;
 }
 
-function buildRunKmEtaTableHtml(rows: RunKmEtaRow[], blackShirt: BlackShirtResult | null): string {
+function buildRunKmEtaTableHtml(rows: RunKmEtaRow[], blackShirt: BlackShirtResult | null, events: SimCustomEvent[] = []): string {
   if (rows.length === 0) {
     return `<p class="sim-velo__km-eta-empty">Pas assez de données course pour estimer les temps au km.</p>`;
   }
   const { h: sh, m: sm } = getRaceStartHourMinute();
+  const colCount = 6;
   const head = `<thead><tr>
 <th scope="col">Km</th>
 <th scope="col">Dénivelé</th>
 <th scope="col">Temps</th>
 <th scope="col">Allure</th>
 <th scope="col">Heure (fin km)</th>
+<th class="sim-event-add-cell" scope="col"></th>
 </tr></thead>`;
   const bodyParts: string[] = [];
   /** Distance horizontale cumulée au début du segment du km courant (avant d’ajouter `r.horizM`). */
@@ -877,23 +950,36 @@ function buildRunKmEtaTableHtml(rows: RunKmEtaRow[], blackShirt: BlackShirtResul
 <td class="sim-velo__km-eta-cell--num">${escapeHtml(blackShirt.clockAtCheckpoint)} (≤ ${escapeHtml(
         blackShirt.cutoffClock
       )})</td>
+<td class="sim-event-add-cell"></td>
 </tr>`);
       blackShirt = null;
     }
 
+    const runExtraS = r.isTotal
+      ? events.filter((e) => e.tableType === "run").reduce((s, e) => s + e.durationS, 0)
+      : runEventsExtraS(events, r.kmLabel);
+    const displayTimeS = r.isTotal ? r.timeS + runExtraS : r.timeS;
     const elevHtml = buildElevationMeterHtml(r.dPlusM, r.dMinusM, r.isTotal);
     const paceStr = formatPaceMinPerKm(r.paceMinPerKmHoriz);
-    const timeCol = formatClockFromRaceStart(r.cumTimeEndAbsS, sh, sm);
+    const timeCol = formatClockFromRaceStart(r.cumTimeEndAbsS + runExtraS, sh, sm);
     const trCls = r.isTotal ? ' class="sim-velo__km-eta-tr--total"' : "";
-    bodyParts.push(`<tr${trCls}>
+    const kmAttr = r.isTotal ? "" : ` data-km="${escapeHtml(r.kmLabel)}"`;
+    const addCell = r.isTotal
+      ? `<td class="sim-event-add-cell"></td>`
+      : `<td class="sim-event-add-cell"><button type="button" class="sim-add-event-btn" data-km="${escapeHtml(r.kmLabel)}" data-table="run" title="Ajouter un événement après le km ${escapeHtml(r.kmLabel)}">+</button></td>`;
+    bodyParts.push(`<tr${trCls}${kmAttr}>
 <td>${escapeHtml(r.kmLabel)}</td>
 <td class="sim-velo__km-eta-cell--elev">${elevHtml}</td>
-<td class="sim-velo__km-eta-cell--num">${escapeHtml(formatEtaSplitTime(r.timeS))}</td>
+<td class="sim-velo__km-eta-cell--num">${escapeHtml(formatEtaSplitTime(displayTimeS))}</td>
 <td class="sim-velo__km-eta-cell--num">${escapeHtml(paceStr)}</td>
 <td class="sim-velo__km-eta-cell--num">${escapeHtml(timeCol)}</td>
+${addCell}
 </tr>`);
 
-    if (!r.isTotal) cumRunDistM += r.horizM;
+    if (!r.isTotal) {
+      bodyParts.push(buildEventRowsHtml(events, r.kmLabel, "run", colCount));
+      cumRunDistM += r.horizM;
+    }
   }
   return `<table class="sim-velo__km-eta-table sim-velo__km-eta-table--run">${head}<tbody>${bodyParts.join(
     ""
@@ -903,6 +989,112 @@ function buildRunKmEtaTableHtml(rows: RunKmEtaRow[], blackShirt: BlackShirtResul
 let simBikeEtaCache: { pointsVelo: GpxTrackPoint[]; distVelo: number[] } | null = null;
 let simRunEtaCache: { pointsRun: GpxTrackPoint[]; distRun: number[]; bikeOffsetS: number } | null = null;
 let simBikeEtaAthleteListenerAttached = false;
+
+// ─── Interactions événements (boutons +, draft, suppression) ─────────────────
+
+/** Durée saisie par l'utilisateur : "5", "5:30", "1h30", "1:30:00" → secondes */
+function parseDraftDurationS(raw: string): number | null {
+  const s = raw.trim().replace(",", ".");
+  // "X:YY" ou "X:YY:ZZ"
+  const colonMatch = s.match(/^(\d+):(\d{1,2})(?::(\d{1,2}))?$/);
+  if (colonMatch) {
+    const h = colonMatch[3] !== undefined ? parseInt(colonMatch[1], 10) : 0;
+    const m = colonMatch[3] !== undefined ? parseInt(colonMatch[2], 10) : parseInt(colonMatch[1], 10);
+    const sec = colonMatch[3] !== undefined ? parseInt(colonMatch[3], 10) : parseInt(colonMatch[2], 10);
+    return h * 3600 + m * 60 + sec;
+  }
+  // "Xh" ou "XhYm" ou "Xmin" etc.
+  const hm = s.match(/^(?:(\d+)\s*h\s*)?(?:(\d+)\s*m(?:in)?\s*)?(?:(\d+)\s*s?)?$/i);
+  if (hm && (hm[1] || hm[2] || hm[3])) {
+    return (parseInt(hm[1] || "0", 10)) * 3600
+         + (parseInt(hm[2] || "0", 10)) * 60
+         + (parseInt(hm[3] || "0", 10));
+  }
+  // Nombre seul → minutes
+  const n = parseFloat(s);
+  if (!isNaN(n) && n >= 0) return Math.round(n * 60);
+  return null;
+}
+
+/**
+ * Attache les handlers pour les boutons "+" (ajouter event), delete (supprimer event validé)
+ * et gère l'insertion de lignes draft.
+ */
+function attachTableAddEventHandlers(tableEl: HTMLElement, onRerender: () => void): void {
+  // Boutons "+" sur chaque ligne km
+  tableEl.querySelectorAll<HTMLButtonElement>(".sim-add-event-btn").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const kmLabel = btn.dataset.km ?? "";
+      const tableType = (btn.dataset.table ?? "bike") as "bike" | "run";
+      const tr = btn.closest("tr");
+      if (!tr) return;
+
+      // S'il existe déjà un draft pour ce km, focus dessus
+      const existing = tr.nextElementSibling;
+      if (existing && existing.classList.contains("sim-event-row--draft")) {
+        (existing.querySelector<HTMLInputElement>(".sim-event-draft-title") ?? existing as unknown as HTMLInputElement).focus();
+        return;
+      }
+
+      const colCount = tableEl.querySelectorAll("thead tr th").length;
+      const draft = document.createElement("tr");
+      draft.className = "sim-event-row sim-event-row--draft";
+      draft.dataset.draftKm = kmLabel;
+      draft.dataset.draftTable = tableType;
+      draft.innerHTML = `<td class="sim-event-row__draft-cell" colspan="${colCount}"><div class="sim-event-row__draft-inner">
+<input class="sim-event-draft-title" type="text" placeholder="Titre (ex: Changement de roue)" aria-label="Titre de l'événement" maxlength="60" />
+<input class="sim-event-draft-duration" type="text" placeholder="5 ou 5:30 ou 1h30" aria-label="Durée" />
+<button type="button" class="sim-event-check-btn" title="Valider">&#10003;</button>
+<button type="button" class="sim-event-trash-btn" title="Annuler">&#128465;</button>
+</div></td>`;
+      tr.after(draft);
+      draft.querySelector<HTMLInputElement>(".sim-event-draft-title")?.focus();
+
+      const checkBtn = draft.querySelector<HTMLButtonElement>(".sim-event-check-btn")!;
+      const trashBtn = draft.querySelector<HTMLButtonElement>(".sim-event-trash-btn")!;
+      const titleInput = draft.querySelector<HTMLInputElement>(".sim-event-draft-title")!;
+      const durInput = draft.querySelector<HTMLInputElement>(".sim-event-draft-duration")!;
+
+      const validate = () => {
+        const title = titleInput.value.trim();
+        const durationS = parseDraftDurationS(durInput.value);
+        if (!title) { titleInput.focus(); titleInput.classList.add("sim-event-draft-title--error"); return; }
+        titleInput.classList.remove("sim-event-draft-title--error");
+        if (durationS === null || durationS <= 0) { durInput.focus(); durInput.classList.add("sim-event-draft-duration--error"); return; }
+        durInput.classList.remove("sim-event-draft-duration--error");
+        const events = getSimCustomEvents();
+        events.push({
+          id: `ev-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+          tableType,
+          afterKmLabel: kmLabel,
+          title,
+          durationS,
+        });
+        setSimCustomEvents(events);
+        draft.remove();
+        onRerender();
+      };
+
+      checkBtn.addEventListener("click", validate);
+      trashBtn.addEventListener("click", () => draft.remove());
+      // Valider avec Entrée depuis les inputs
+      [titleInput, durInput].forEach((inp) => inp.addEventListener("keydown", (e) => {
+        if (e.key === "Enter") validate();
+        if (e.key === "Escape") draft.remove();
+      }));
+    });
+  });
+
+  // Boutons "supprimer" sur les événements validés
+  tableEl.querySelectorAll<HTMLButtonElement>(".sim-event-del-btn").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const id = btn.dataset.eventId ?? "";
+      const events = getSimCustomEvents().filter((e) => e.id !== id);
+      setSimCustomEvents(events);
+      onRerender();
+    });
+  });
+}
 
 function renderSimRunKmEtaTable(root: HTMLElement): void {
   const t2SummaryEl = root.querySelector<HTMLElement>("#sim-t2-summary");
@@ -919,17 +1111,23 @@ function renderSimRunKmEtaTable(root: HTMLElement): void {
     );
     bikeTotalS = bikeRows.length > 0 ? bikeRows[bikeRows.length - 1].cumTimeEndS : simRunEtaCache.bikeOffsetS;
   }
-  if (t2SummaryEl) t2SummaryEl.innerHTML = buildT2SummaryHtml(bikeTotalS);
+  // Intègre les événements vélo dans la base temporelle de tout ce qui suit
+  const allEvents = getSimCustomEvents();
+  const bikeTotalWithEventsS = bikeTotalS + totalBikeEventsS(allEvents);
+  if (t2SummaryEl) t2SummaryEl.innerHTML = buildT2SummaryHtml(bikeTotalWithEventsS);
   const swimOffsetS = getSwimDurationS() + getT1DurationS() + getT2DurationS();
   const runRows = computeRunKmEtaRows(
     simRunEtaCache.pointsRun,
     simRunEtaCache.distRun,
     getVmaCapKmh(),
-    bikeTotalS + swimOffsetS
+    bikeTotalWithEventsS + swimOffsetS
   );
   const { h: sh, m: sm } = getRaceStartHourMinute();
-  let blackShirt = computeBlackShirtResult(runRows, sh, sm);
-  tableEl.innerHTML = buildRunKmEtaTableHtml(runRows, blackShirt);
+  const totalRunEventsS = allEvents.filter((e) => e.tableType === "run").reduce((s, e) => s + e.durationS, 0);
+  let blackShirt = computeBlackShirtResult(runRows, sh, sm, totalRunEventsS);
+  tableEl.innerHTML = buildRunKmEtaTableHtml(runRows, blackShirt, allEvents);
+  const runTableEl = tableEl.querySelector<HTMLElement>("table");
+  if (runTableEl) attachTableAddEventHandlers(runTableEl, () => renderSimRunKmEtaTable(root));
 
   // Affichage dans la barre « Paramètres » (bloc heure finale — simulation)
   const finalEl = document.getElementById("sim-final-time");
@@ -937,7 +1135,7 @@ function renderSimRunKmEtaTable(root: HTMLElement): void {
   if (finalEl && finalValEl) {
     const last = runRows.length > 0 ? runRows[runRows.length - 1] : null;
     if (last && last.isTotal) {
-      finalValEl.textContent = formatClockFromRaceStart(last.cumTimeEndAbsS, sh, sm);
+      finalValEl.textContent = formatClockFromRaceStart(last.cumTimeEndAbsS + totalRunEventsS, sh, sm);
       finalEl.hidden = false;
     } else {
       finalValEl.textContent = "—";
@@ -976,7 +1174,10 @@ function renderSimBikeKmEtaTable(root: HTMLElement): void {
   const rows = computeBikeKmEtaRows(simBikeEtaCache.pointsVelo, simBikeEtaCache.distVelo, P, M, fatigue);
   const garminData = loadGarminSplitsFromStorage();
   const garminInterp = garminData ? buildGarminInterpolation(garminData) : null;
-  tableEl.innerHTML = buildBikeKmEtaTableHtml(rows, getSwimDurationS() + getT1DurationS(), garminInterp);
+  const bikeEvents = getSimCustomEvents();
+  tableEl.innerHTML = buildBikeKmEtaTableHtml(rows, getSwimDurationS() + getT1DurationS(), garminInterp, bikeEvents);
+  const bikeTableEl = tableEl.querySelector<HTMLElement>("table");
+  if (bikeTableEl) attachTableAddEventHandlers(bikeTableEl, () => renderSimBikeKmEtaTable(root));
   renderSimRunKmEtaTable(root);
 }
 
